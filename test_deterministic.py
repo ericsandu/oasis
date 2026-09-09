@@ -1,0 +1,48 @@
+import asyncio
+import os
+import oasis
+from oasis import (ActionType, ManualAction, generate_reddit_agent_graph)
+
+async def main():
+    available_actions = [
+        ActionType.LIKE_POST, ActionType.DISLIKE_POST, ActionType.CREATE_POST,
+        ActionType.CREATE_COMMENT, ActionType.LIKE_COMMENT, ActionType.DISLIKE_COMMENT,
+        ActionType.SEARCH_POSTS, ActionType.SEARCH_USER, ActionType.TREND,
+        ActionType.REFRESH, ActionType.DO_NOTHING, ActionType.FOLLOW, ActionType.MUTE,
+    ]
+
+    # Generate agent graph without specifying a model (defaults to None or camel's default)
+    agent_graph = await generate_reddit_agent_graph(
+        profile_path="./data/reddit/user_data_36.json",
+        model=None,
+        available_actions=available_actions,
+    )
+
+    db_path = "./data/reddit_simulation.db"
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+    env = oasis.make(
+        agent_graph=agent_graph,
+        platform=oasis.DefaultPlatformType.REDDIT,
+        database_path=db_path,
+    )
+
+    await env.reset()
+    
+    # Run deterministic actions
+    actions_1 = {}
+    actions_1[env.agent_graph.get_agent(0)] = [
+        ManualAction(action_type=ActionType.CREATE_POST, action_args={"content": "Deterministic post 1"}),
+    ]
+    actions_1[env.agent_graph.get_agent(1)] = ManualAction(
+        action_type=ActionType.CREATE_COMMENT,
+        action_args={"post_id": "1", "content": "Deterministic comment 1"}
+    )
+    
+    await env.step(actions_1)
+    await env.close()
+    print("Deterministic test successful!")
+
+if __name__ == "__main__":
+    asyncio.run(main())
