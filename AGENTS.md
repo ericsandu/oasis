@@ -11,7 +11,7 @@ This repository uses the **OASIS** framework to simulate **Coordinated Inauthent
 * **The Environment:** A dual-tower neural architecture where Tower 1 (NLP) maps semantic text embeddings and Tower 2 (GNN) maps structural user graphs (`follow` edges).
 
 ## 2. Repository Structure & Modification Constraints
-* **`oasis/` (Core Engine):** Modify core baseline framework files with extreme caution. During early testing, we treated the TWIN-BERT engine as a strict black box. However, some hardcoded parameters (like the `max_rec_post_len` feed quota) are not ideal for all tests and may require adjustment. Additionally, we may eventually migrate away from TWIN-BERT to other recommender algorithms. Any modifications to the core engine must be heavily documented and preserve backward compatibility with our existing experiments.
+* **`oasis/` (Core Engine):** Modify core baseline framework files with extreme caution. During early testing, we treated the TWIN-BERT engine as a strict black box. However, some hardcoded parameters (like the `max_rec_post_len` feed quota) are not ideal for all tests and may require adjustment. Any modifications to the core engine must be heavily documented and preserve backward compatibility with our existing experiments.
 * **`scratch/` (Phase 1 - Deterministic Tests):** Contains isolated python scripts testing topological vulnerabilities using `model=None` (dummy agents).
 * **`data/`**: Contains generated synthetic JSON profiles and SQLite `.db` environments.
 * **`cib_zoo/` (Phase 2 - LLM Attacks):** Contains the scaffolding for autonomous LLM botnets.
@@ -33,8 +33,11 @@ If the user asks you to write a new deterministic experiment, follow this execut
 ## 5. Future Roadmap (Phase 2 & Beyond)
 *Note: This is a directional roadmap, not a rigid set of instructions that reading agents must immediately execute. Always follow the user's explicit prompts over these general goals.*
 
-Because Phase 1 proved that a 1-hop structural edge is mathematically required to bypass the TWIN-BERT algorithm, the broader research roadmap points toward transitioning the agents from `model=None` to autonomous LLMs. 
+* **Objective A: Transition to LLMs (Complex Contagion)**
+  Because Phase 1 proved that a 1-hop structural edge is mathematically required to bypass the TWIN-BERT algorithm, the next goal for the `TargetingEngine` inside `cib_zoo/` is to test if LLM agents can successfully execute **Parasitic Infiltration**: scanning organic user bios, generating hyper-targeted empathetic replies, and actively socially engineering organic agents into forging the required 1-hop topological bridges. 
 
-The eventual goal for the `TargetingEngine` inside `cib_zoo/` is to test if LLM agents can successfully execute **Parasitic Infiltration**: scanning organic user bios, generating hyper-targeted empathetic replies, and actively socially engineering organic agents into forging the required 1-hop topological bridges. 
+* **Objective B: Recommender Engine Migration (The "Gorse" Pivot)**
+  We are evaluating if TWIN-BERT is too computationally heavy or statistically rigid for large-scale simulations. The architectural roadmap includes abstracting the `Recommender` interface and pivoting to **Gorse** (a scalable, open-source ensemble filtering engine). Agents should be prepared to integrate Gorse's REST APIs, which support multi-source blending and LLM-based reranking (opening up advanced "Prompt Injection" vulnerabilities).
 
-When eventually tasked with Phase 2 items, ensure all LLM attack logic is highly modular and adheres to the black-box OSINT constraint (bots cannot read the hidden database traits; they must scrape public profiles and feeds).
+* **Objective C: HPC Containerization ("Simulation-in-a-Box")**
+  To support massive scale and guarantee absolute reproducibility on High-Performance Computing (HPC) clusters, the entire simulation ecosystem (OASIS + Gorse + LLM dependencies) will be Dockerized into a single monolithic image. This ensures the environment can be pulled natively via Apptainer/Singularity without dependency hell. Future agents configuring this setup must design the entrypoint script to seamlessly boot the Gorse backend before launching the Python OASIS frontend.
