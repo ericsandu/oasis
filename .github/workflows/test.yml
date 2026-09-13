@@ -1,0 +1,22 @@
+name: OASIS Simulation Suite
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Docker Container
+        run: docker build -t camel-oasis:latest .
+
+      - name: Run Gorse Hybrid Baseline Test
+        run: |
+          mkdir -p data
+          docker run --rm -v "$(pwd)/data":/app/data camel-oasis:latest python scratch/test_gorse.py

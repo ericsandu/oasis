@@ -4,3 +4,19 @@ data_store = "sqlite:///app/data/gorse_data.db"
 
 [server]
 default_n = 100
+
+[recommend]
+fallback_recommend = ["item_to_item", "popular", "latest"]
+
+[recommend.collaborative]
+enable_index = true
+
+[recommend.item_to_item]
+enable_index = true
+
+[recommend.offline]
+check_recommend_period = 1
+explore_recommend = { popular = 0.3, latest = 0.3, collaborative = 0.4 }
+
+[recommend.popular]
+popular_window = "720h"
