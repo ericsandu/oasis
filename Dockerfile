@@ -21,6 +21,9 @@ WORKDIR /app
 # Install poetry
 RUN pip install --no-cache-dir poetry
 
+# Prevent poetry from creating virtualenvs globally before we copy files
+RUN poetry config virtualenvs.create false
+
 # Copy the rest of the application
 COPY . .
 
@@ -28,12 +31,8 @@ COPY . .
 RUN rm -f poetry.lock
 
 # Lock and install dependencies natively inside the 3.11 container
-RUN poetry lock && \
-    poetry config virtualenvs.create false && \
-    poetry install --no-interaction --no-ansi
+RUN poetry lock && poetry install --no-interaction --no-ansi
 
-# Install matplotlib for graphing outputs in scratch tests
-RUN pip install --no-cache-dir matplotlib httpx
 
 RUN chmod +x /app/entrypoint.sh
 

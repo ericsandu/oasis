@@ -4,13 +4,14 @@ import os
 import random
 import datetime
 import json
-import matplotlib.pyplot as plt
 
 os.environ["OPENAI_API_KEY"] = "sk-mock-key"
 
 import oasis
 from oasis import ActionType, ManualAction, generate_reddit_agent_graph
 from oasis.social_platform.typing import DefaultPlatformType
+from oasis.social_platform.platform import Platform
+from oasis.social_platform.channel import Channel
 
 NUM_TECH = 20
 NUM_SPORTS = 80
@@ -49,25 +50,23 @@ def inject_graph_topology(db_path):
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
-    # 1. Tech Echo Chamber (Tech follows Tech)
+    # 1. Tech Echo Chamber
     for i in range(NUM_TECH):
         for j in range(NUM_TECH):
             if i != j and random.random() < 0.3:
                 c.execute("INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)", (i, j, datetime.datetime.now()))
                 
-    # 2. Sports Echo Chamber (Sports follows Sports)
+    # 2. Sports Echo Chamber
     for i in range(NUM_TECH, NUM_TECH + NUM_SPORTS):
         for j in range(NUM_TECH, NUM_TECH + NUM_SPORTS):
             if i != j and random.random() < 0.15:
                 c.execute("INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)", (i, j, datetime.datetime.now()))
                 
-    # 3. TIER 4: PARASITIC INFILTRATION (Bots bridge the graph)
+    # 3. TIER 4: PARASITIC INFILTRATION
     for b in range(NUM_TECH + NUM_SPORTS, TOTAL_USERS):
-        # Bots aggressively follow sports fans
         for s in range(NUM_TECH, NUM_TECH + NUM_SPORTS):
             if random.random() < 0.4:
                 c.execute("INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)", (b, s, datetime.datetime.now()))
-                # Trick them into mutuals
                 if random.random() < 0.2:
                     c.execute("INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)", (s, b, datetime.datetime.now()))
                     
@@ -88,9 +87,19 @@ async def run_cross_community():
         available_actions=ActionType.get_default_reddit_actions(),
     )
 
+    channel = Channel()
+    platform = Platform(
+        db_path=db_path,
+        channel=channel,
+        recsys_type="gorse",
+        refresh_rec_post_count=2,
+        max_rec_post_len=2,
+        following_post_count=3,
+    )
+
     env = oasis.make(
         agent_graph=agent_graph,
-        platform=DefaultPlatformType.TWITTER, recsys_type="gorse", 
+        platform=platform,
         database_path=db_path,
     )
     await env.reset()
@@ -112,13 +121,11 @@ async def run_cross_community():
         if random.random() < 0.4:
             initial_actions[u] = ManualAction(ActionType.CREATE_POST, {"content": "What a game last night! #sports"})
     
-    # Bots create sports posts to align their NLP embedding
     for b in bot_agents:
         initial_actions[b] = ManualAction(ActionType.CREATE_POST, {"content": "Can't believe that touchdown! #sports"})
         
     await env.step(initial_actions)
     
-    # Settle
     for _ in range(2): await env.step({})
 
     print("\n--- PHASE 2: THE PIVOT (Tech Propaganda) ---")
@@ -143,7 +150,6 @@ async def run_cross_community():
         
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
-        # Calculate how many SPORTS fans saw the tech post
         c.execute(f"SELECT COUNT(DISTINCT user_id) FROM rec WHERE post_id = ? AND user_id >= {NUM_TECH} AND user_id < {NUM_TECH + NUM_SPORTS}", (target_post_id,))
         sports_reach = c.fetchone()[0]
         conn.close()
@@ -154,16 +160,6 @@ async def run_cross_community():
 
     await env.close()
     
-    # Plotting
-    plt.figure(figsize=(8, 5))
-    plt.plot(history_steps, history_sports_reach, marker='o', color='red', linewidth=2)
-    plt.title('Tier 4: Cross-Community Spillover (Tech Post -> Sports Feed)')
-    plt.xlabel('Bot Pivot Actions (Steps)')
-    plt.ylabel('Unique Impressions in Disjunct Crowd')
-    plt.ylim(0, NUM_SPORTS)
-    plt.axhline(y=0, color='gray', linestyle='--')
-    plt.tight_layout()
-    plt.savefig("scratch/cross_community_dashboard.png", dpi=300)
 
 if __name__ == "__main__":
     asyncio.run(run_cross_community())
