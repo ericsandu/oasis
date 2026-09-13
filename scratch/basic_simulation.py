@@ -1,3 +1,5 @@
+# flake8: noqa
+# ruff: noqa
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 # Licensed under the Apache License, Version 2.0 (the “License”);
 # you may not use this file except in compliance with the License.
@@ -18,11 +20,12 @@ import random
 import oasis
 from oasis import ActionType, ManualAction, generate_reddit_agent_graph
 from oasis.social_platform.typing import DefaultPlatformType
+os.environ["OPENAI_API_KEY"] = "sk-mock-key"
+
 
 
 async def main():
     # We use a mock configuration by not passing an LLM model
-    os.environ["OPENAI_API_KEY"] = "sk-mock-key"
     # and using the pre-existing user data.
     print("Generating agent graph without LLM...")
     agent_graph = await generate_reddit_agent_graph(

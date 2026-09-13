@@ -1,3 +1,5 @@
+# flake8: noqa
+# ruff: noqa
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 # Licensed under the Apache License, Version 2.0 (the “License”);
 # you may not use this file except in compliance with the License.
@@ -19,11 +21,12 @@ import sqlite3
 
 import matplotlib.pyplot as plt
 
-os.environ["OPENAI_API_KEY"] = "sk-mock-key"
 
 import oasis
 from oasis import ActionType, ManualAction, generate_reddit_agent_graph
 from oasis.social_platform.typing import DefaultPlatformType
+os.environ["OPENAI_API_KEY"] = "sk-mock-key"
+
 
 NUM_ALIGNED = 30
 NUM_DISJUNCT = 170
@@ -86,7 +89,8 @@ async def run_large_scale():
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute("SELECT post_id FROM post WHERE user_id = ?", (target_user.agent_id,))
-    c.execute("SELECT post_id FROM post ORDER BY post_id DESC LIMIT 1"); target_post_id = str(c.fetchone()[0])
+    c.execute("SELECT post_id FROM post ORDER BY post_id DESC LIMIT 1")
+    target_post_id = str(c.fetchone()[0])
     conn.close()
 
     # Let TWIN-BERT settle feeds for 2 steps organically
@@ -159,14 +163,16 @@ def generate_plots(steps, reach, align_op, disj_op, cost):
     ax1.axvline(x=2.5, color='gray', linestyle='--')
     ax1.set_title('Content Competition Reach (250 Users)')
     ax1.set_xlabel('Step')
-    ax1.set_ylabel('Impressions (Fighting Noise)'); ax1.set_ylim(0, 250)
+    ax1.set_ylabel('Impressions (Fighting Noise)')
+    ax1.set_ylim(0, 250)
 
     ax2.plot(steps, align_op, marker='s', color='#00ffcc', linewidth=2, label='Aligned Sub-graph')
     ax2.plot(steps, disj_op, marker='x', color='#ff3366', linewidth=2, label='Disjunct Sub-graph')
     ax2.axvline(x=2.5, color='gray', linestyle='--')
     ax2.set_title('Polarized Opinion Drift ($\Delta E$)')
     ax2.set_xlabel('Step')
-    ax2.set_ylabel('Avg Belief'); ax2.set_ylim(-0.2, 1.0)
+    ax2.set_ylabel('Avg Belief')
+    ax2.set_ylim(-0.2, 1.0)
     ax2.legend()
 
     ax3.plot(cost, reach, marker='^', color='orange', linewidth=2)
