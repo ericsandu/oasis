@@ -19,4 +19,4 @@ jobs:
       - name: Run Gorse Hybrid Baseline Test
         run: |
           mkdir -p data
-          docker run --rm -v "$(pwd)/data":/app/data camel-oasis:latest python scratch/test_gorse.py
+          docker run --rm -v "$(pwd)/data":/app/data camel-oasis:latest bash -c "PYTHONPATH=/app python scratch/test_gorse.py"
