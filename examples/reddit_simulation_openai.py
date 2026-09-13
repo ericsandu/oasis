@@ -18,8 +18,7 @@ from camel.models import ModelFactory
 from camel.types import ModelPlatformType, ModelType
 
 import oasis
-from oasis import (ActionType, LLMAction, ManualAction,
-                   generate_reddit_agent_graph)
+from oasis import ActionType, LLMAction, ManualAction, generate_reddit_agent_graph
 
 
 async def main():

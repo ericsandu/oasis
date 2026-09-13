@@ -11,7 +11,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
-# flake8: noqa: E402
 from __future__ import annotations
 
 import argparse
@@ -33,8 +32,10 @@ from camel.models import ModelFactory
 from camel.types import ModelPlatformType, ModelType
 
 from oasis.clock.clock import Clock
-from oasis.social_agent.agents_generator import (gen_control_agents_with_data,
-                                                 generate_reddit_agents)
+from oasis.social_agent.agents_generator import (
+    gen_control_agents_with_data,
+    generate_reddit_agents,
+)
 from oasis.social_platform.channel import Channel
 from oasis.social_platform.platform import Platform
 from oasis.social_platform.typing import ActionType
@@ -45,7 +46,7 @@ social_log.setLevel("DEBUG")
 
 if not social_log.handlers:
     now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    file_handler = logging.FileHandler(f"./log/social-{str(now)}.log",
+    file_handler = logging.FileHandler(f"./log/social-{now!s}.log",
                                        encoding="utf-8")
     file_handler.setLevel("DEBUG")
     file_handler.setFormatter(

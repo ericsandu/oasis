@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 # Licensed under the Apache License, Version 2.0 (the “License”);
 # you may not use this file except in compliance with the License.
@@ -11,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
-# flake8: noqa: E402
 from __future__ import annotations
 
 import argparse
@@ -34,8 +34,10 @@ sys.path.append(scripts_dir)
 from utils import create_model_urls
 
 from oasis.clock.clock import Clock
-from oasis.social_agent.agents_generator import (gen_control_agents_with_data,
-                                                 generate_reddit_agents)
+from oasis.social_agent.agents_generator import (
+    gen_control_agents_with_data,
+    generate_reddit_agents,
+)
 from oasis.social_platform.channel import Channel
 from oasis.social_platform.platform import Platform
 from oasis.social_platform.typing import ActionType
@@ -44,7 +46,7 @@ social_log = logging.getLogger(name="social")
 social_log.propagate = False
 social_log.setLevel("DEBUG")
 now = datetime.now()
-file_handler = logging.FileHandler(f"./log/social-{str(now)}.log",
+file_handler = logging.FileHandler(f"./log/social-{now!s}.log",
                                    encoding="utf-8")
 file_handler.setLevel("DEBUG")
 file_handler.setFormatter(

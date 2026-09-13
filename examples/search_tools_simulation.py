@@ -19,8 +19,7 @@ from camel.toolkits import SearchToolkit
 from camel.types import ModelPlatformType, ModelType
 
 import oasis
-from oasis import (ActionType, AgentGraph, LLMAction, ManualAction,
-                   SocialAgent, UserInfo)
+from oasis import ActionType, AgentGraph, LLMAction, ManualAction, SocialAgent, UserInfo
 
 
 async def main():

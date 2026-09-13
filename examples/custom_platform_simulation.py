@@ -18,8 +18,13 @@ from camel.models import ModelFactory
 from camel.types import ModelPlatformType, ModelType
 
 import oasis
-from oasis import (ActionType, LLMAction, ManualAction, Platform,
-                   generate_twitter_agent_graph)
+from oasis import (
+    ActionType,
+    LLMAction,
+    ManualAction,
+    Platform,
+    generate_twitter_agent_graph,
+)
 from oasis.social_platform.channel import Channel
 from oasis.social_platform.typing import RecsysType
 
