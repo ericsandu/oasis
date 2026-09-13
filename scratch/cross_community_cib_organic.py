@@ -1,9 +1,23 @@
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 import asyncio
-import sqlite3
-import os
-import random
 import datetime
 import json
+import os
+import random
+import sqlite3
+
 import matplotlib.pyplot as plt
 
 os.environ["OPENAI_API_KEY"] = "sk-mock-key"
@@ -27,9 +41,9 @@ def generate_synthetic_profiles(filepath):
             bio = "Sports fanatic, loves football."
             group = "sports"
         else:
-            bio = "Sports fanatic, loves football." 
+            bio = "Sports fanatic, loves football."
             group = "bot"
-            
+
         profiles.append({
             "realname": f"User_{i}",
             "username": f"user_{i}_{group}",
@@ -78,17 +92,18 @@ async def run_cross_community():
     generate_synthetic_profiles(profile_path)
     db_path = os.path.abspath("./data/bridge_organic.db")
     os.environ["OASIS_DB_PATH"] = db_path
-    if os.path.exists(db_path): os.remove(db_path)
+    if os.path.exists(db_path):
+        os.remove(db_path)
 
     agent_graph = await generate_reddit_agent_graph(profile_path=profile_path, model=None, available_actions=ActionType.get_default_reddit_actions())
     env = oasis.make(agent_graph=agent_graph, platform=DefaultPlatformType.TWITTER, database_path=db_path)
     await env.reset()
     inject_graph_topology(db_path)
-    
+
     tech_agents = [env.agent_graph.get_agent(i) for i in range(NUM_TECH)]
     sports_agents = [env.agent_graph.get_agent(i) for i in range(NUM_TECH, NUM_TECH + NUM_SPORTS)]
     bot_agents = [env.agent_graph.get_agent(i) for i in range(NUM_TECH + NUM_SPORTS, TOTAL_USERS)]
-    
+
     target_user = tech_agents[0]
     history_steps, history_sports_reach = [], []
 
@@ -99,13 +114,14 @@ async def run_cross_community():
             initial_actions[u] = ManualAction(ActionType.CREATE_POST, {"content": "What a game last night! #sports"})
     for b in bot_agents:
         initial_actions[b] = ManualAction(ActionType.CREATE_POST, {"content": "Can't believe that touchdown! #sports"})
-        
+
     await env.step(initial_actions)
-    for _ in range(2): await env.step({})
+    for _ in range(2):
+        await env.step({})
 
     print("\n--- PHASE 2: THE PIVOT ---")
     await env.step({target_user: ManualAction(ActionType.CREATE_POST, {"content": "Massive new tech regulation just dropped, this changes everything. #tech #policy"})})
-    
+
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute("SELECT post_id FROM post ORDER BY post_id DESC LIMIT 1")
@@ -119,28 +135,28 @@ async def run_cross_community():
         acting_bots = random.sample(bot_agents, 3)
         for bot in acting_bots:
             actions[bot] = ManualAction(ActionType.LIKE_POST, {"post_id": target_post_id})
-            
+
         # Organic Users Randomly interact with feeds
         for idx, u in enumerate(sports_agents):
             feed = get_user_feed(db_path, NUM_TECH + idx)
             if feed and random.random() < 0.3: # 30% chance to like a post they see
                 post_to_like = random.choice(feed)
                 actions[u] = ManualAction(ActionType.LIKE_POST, {"post_id": str(post_to_like)})
-                
+
         await env.step(actions)
-        
+
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         c.execute(f"SELECT COUNT(DISTINCT user_id) FROM rec WHERE post_id = ? AND user_id >= {NUM_TECH} AND user_id < {NUM_TECH + NUM_SPORTS}", (target_post_id,))
         sports_reach = c.fetchone()[0]
         conn.close()
-        
+
         history_steps.append(step)
         history_sports_reach.append(sports_reach)
         print(f"Step {step}: Tech Propaganda Reach in Sports Crowd = {sports_reach}")
 
     await env.close()
-    
+
     plt.figure(figsize=(8, 5))
     plt.plot(history_steps, history_sports_reach, marker='o', color='purple', linewidth=2)
     plt.title('Secondary Contagion: Organic Amplification')

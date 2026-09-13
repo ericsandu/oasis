@@ -1,3 +1,16 @@
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 import asyncio
 import os
 import random
@@ -45,17 +58,18 @@ async def main():
 
     # We can inspect the DB by querying it
     import sqlite3
+
     from oasis.social_platform.database import fetch_table_from_db
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     posts = fetch_table_from_db(cursor, "post")
     print(f"Total posts in DB: {len(posts)}")
-    
-    # Step 2: Systematic behavior 
+
+    # Step 2: Systematic behavior
     # Let's make agents 5-15 systematically like all posts that mention "Organic"
     print("Step 2: Systematic behavior (Liking specific posts)...")
     target_post_ids = [str(p['post_id']) for p in posts if "Organic" in p['content']]
-    
+
     actions_step2 = {}
     for i in range(5, 15):
         agent = env.agent_graph.get_agent(i)
@@ -66,7 +80,7 @@ async def main():
                 action_type=ActionType.LIKE_POST,
                 action_args={"post_id": chosen_post}
             )
-            
+
     if actions_step2:
         await env.step(actions_step2)
 
@@ -87,7 +101,7 @@ async def main():
             action_args={"post_id": str(most_liked_post['post_id']), "content": f"Bot comment from {agent.user_info.name}"}
         )
     await env.step(actions_step3)
-    
+
     comments = fetch_table_from_db(cursor, "comment")
     print(f"Total comments on post {most_liked_post['post_id']}: {len(comments)}")
 

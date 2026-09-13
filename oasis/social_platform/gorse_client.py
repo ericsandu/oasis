@@ -1,7 +1,20 @@
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 import logging
 from typing import Any, Dict, List
+
 import httpx
-import asyncio
 
 gorse_log = logging.getLogger("social.gorse")
 gorse_log.setLevel(logging.DEBUG)
@@ -40,7 +53,7 @@ class GorseClient:
                 "Labels": [u.get("name", "agent")]
             })
         if users:
-            await self._post("/user", users)
+            await self._post("/users", users)
 
     async def bulk_insert_items(self, post_table: List[Dict[str, Any]]):
         items = []
@@ -51,24 +64,25 @@ class GorseClient:
 
             items.append({
                 "ItemId": str(p["post_id"]),
-                "Timestamp": p.get("created_at", "2020-01-01T00:00:00Z"),
+                "Timestamp": "2026-01-01T12:00:00Z",
                 "Labels": keywords
             })
         if items:
-            await self._post("/item", items)
+            await self._post("/items", items)
 
     async def bulk_insert_feedback(self, trace_table: List[Dict[str, Any]]):
         feedback = []
         for t in trace_table:
             if t["action"] == "like_post":
-                action_info = eval(t["action_info"]) if isinstance(t["action_info"], str) else t["action_info"]
+                action_info_str = t.get("action_info") or t.get("info", "{}")
+                action_info = eval(action_info_str) if isinstance(action_info_str, str) else action_info_str
                 post_id = action_info.get("like_id") or action_info.get("post_id")
                 if post_id:
                     feedback.append({
                         "FeedbackType": "like",
                         "UserId": str(t["user_id"]),
                         "ItemId": str(post_id),
-                        "Timestamp": t.get("created_at", "2020-01-01T00:00:00Z")
+                        "Timestamp": "2026-01-01T12:00:00Z"
                     })
         if feedback:
             await self._post("/feedback", feedback)
@@ -92,7 +106,7 @@ class GorseClient:
 
         # Force a recommendation generation update
         # Wait for Gorse to process (it runs on background cron natively, but we can trigger a fast recommend sync if needed)
-        
+
         gorse_log.info("Fetching recommendations from Gorse...")
         new_rec_matrix = []
         # Query recommendations for all users

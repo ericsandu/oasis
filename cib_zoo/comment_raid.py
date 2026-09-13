@@ -1,11 +1,25 @@
-import asyncio
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 import random
-from typing import List, Dict, Any
+from typing import Any, List
+
 from oasis import ActionType, ManualAction
+
 
 async def execute_comment_raid(env: Any, bot_ids: List[int], target_post_ids: List[str], templates: List[str]):
     """
-    Implements the Comment Stuffing / Reply Raid attack. 
+    Implements the Comment Stuffing / Reply Raid attack.
     Bots comment on targeted high-reach organic posts using predefined templates.
 
     Args:
@@ -15,7 +29,7 @@ async def execute_comment_raid(env: Any, bot_ids: List[int], target_post_ids: Li
         templates (List[str]): Randomly selected spam messages.
     """
     actions = {}
-    
+
     for bot_id in bot_ids:
         agent = env.agent_graph.get_agent(bot_id)
         bot_actions = []
@@ -32,4 +46,4 @@ async def execute_comment_raid(env: Any, bot_ids: List[int], target_post_ids: Li
     print(f"[Comment Raid] Executing comment raid with {len(bot_ids)} bots on {len(target_post_ids)} target posts.")
     if actions:
         await env.step(actions)
-    print(f"[Comment Raid] Attack complete.")
+    print("[Comment Raid] Attack complete.")

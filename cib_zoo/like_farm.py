@@ -1,10 +1,24 @@
-import asyncio
-from typing import List, Dict, Any
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+from typing import Any, List
+
 from oasis import ActionType, ManualAction
+
 
 async def execute_like_farm(env: Any, bot_ids: List[int], target_post_ids: List[str]):
     """
-    Executes a Like-farming attack where a specific group of bots provides likes/reactions 
+    Executes a Like-farming attack where a specific group of bots provides likes/reactions
     to target posts within a designated time window.
 
     Args:
@@ -13,7 +27,7 @@ async def execute_like_farm(env: Any, bot_ids: List[int], target_post_ids: List[
         target_post_ids (List[str]): The list of target post IDs to inflate.
     """
     actions = {}
-    
+
     # Assign like actions to each bot
     for bot_id in bot_ids:
         agent = env.agent_graph.get_agent(bot_id)
@@ -30,5 +44,4 @@ async def execute_like_farm(env: Any, bot_ids: List[int], target_post_ids: List[
     print(f"[Like Farm] Executing like farm attack with {len(bot_ids)} bots on {len(target_post_ids)} target posts.")
     if actions:
         await env.step(actions)
-    print(f"[Like Farm] Attack complete.")
-
+    print("[Like Farm] Attack complete.")
