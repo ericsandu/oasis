@@ -24,6 +24,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
           pip install ruff
+          pip install yamllint
+
+      - name: Run Yamllint
+        run: |
+          yamllint .
 
       - name: Run Ruff Linting
         run: |

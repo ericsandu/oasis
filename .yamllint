@@ -1,0 +1,20 @@
+extends: default
+
+ignore: |
+  .git/
+  venv/
+  .venv/
+  build/
+  dist/
+  .cache/
+  .ruff_cache/
+  *.json
+
+rules:
+  line-length: disable
+  document-start: disable
+  truthy:
+    level: error
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
