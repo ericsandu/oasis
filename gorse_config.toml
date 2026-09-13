@@ -1,0 +1,6 @@
+[database]
+cache_store = "sqlite:///app/data/gorse_cache.db"
+data_store = "sqlite:///app/data/gorse_data.db"
+
+[server]
+default_n = 100

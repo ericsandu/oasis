@@ -6,7 +6,15 @@ RUN apt-get update && apt-get install -y \
     libcairo2-dev \
     pkg-config \
     python3-dev \
+    wget \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Gorse
+RUN wget -q https://github.com/gorse-io/gorse/releases/download/v0.5.11/gorse_linux_amd64.zip && \
+    unzip gorse_linux_amd64.zip -d /tmp/gorse && \
+    mv /tmp/gorse/gorse-in-one /usr/local/bin/ && \
+    rm -rf /tmp/gorse gorse_linux_amd64.zip
 
 WORKDIR /app
 
@@ -25,7 +33,10 @@ RUN poetry lock && \
     poetry install --no-interaction --no-ansi
 
 # Install matplotlib for graphing outputs in scratch tests
-RUN pip install --no-cache-dir matplotlib
+RUN pip install --no-cache-dir matplotlib httpx
 
-# Default command
+RUN chmod +x /app/entrypoint.sh
+
+# Use entrypoint to boot background services before main execution
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["bash"]

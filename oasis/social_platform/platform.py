@@ -340,6 +340,13 @@ class Platform:
             new_rec_matrix = rec_sys_personalized_with_trace(
                 user_table, post_table, trace_table, rec_matrix,
                 self.max_rec_post_len)
+        elif self.recsys_type == RecsysType.GORSE:
+            from oasis.social_platform.gorse_client import GorseClient
+            gorse = GorseClient()
+            import asyncio
+            new_rec_matrix = await gorse.update_rec_table(
+                user_table, post_table, trace_table, rec_matrix,
+                self.max_rec_post_len)
         elif self.recsys_type == RecsysType.TWHIN:
             try:
                 latest_post_time = post_table[-1]["created_at"]
