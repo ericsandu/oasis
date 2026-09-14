@@ -1,43 +1,52 @@
 # 🤖 System Context & Project State for AI Assistants
 
-**To any AI agent or LLM assistant reading this file:** 
+**To any AI agent or LLM assistant reading this file:**
 This document contains the critical architectural context, experimental history, and technical roadmap of this repository. Read this entirely before assisting the user with new code generation or data analysis.
 
----
+______________________________________________________________________
 
 ## 1. Project Overview
-This repository uses the **OASIS** framework to simulate **Coordinated Inauthentic Behavior (CIB)** and social contagion within Neural Recommender Systems (currently evaluating **TWIN-BERT**). 
-* **The Goal:** To understand how malicious botnets can bypass algorithmic quarantines to propagate propaganda across disparate demographic clusters.
-* **The Environment:** A dual-tower neural architecture where Tower 1 (NLP) maps semantic text embeddings and Tower 2 (GNN) maps structural user graphs (`follow` edges).
+
+This repository uses the **OASIS** framework to simulate **Coordinated Inauthentic Behavior (CIB)** and social contagion within modern Neural and Behavioral Recommender Systems (evaluating a hybrid of **Gorse** and **TWIN-BERT**).
+
+- **The Goal:** Understand how autonomous botnets and coordinated actors bypass algorithmic quarantines to propagate out-of-context propaganda across disparate demographic clusters (e.g., `#tech` propaganda into a `#sports` community).
+- **The Architecture:** A Twitter-style multi-objective hybrid recommender combining:
+  1. **In-Network Graph (SQL):** Direct follows and 2-hop social proof ("liked by friend").
+  2. **Behavioral & Interaction Graph (Gorse):** Collaborative filtering, popularity velocity, and recency exploration.
+  3. **Semantic Content Engine (TwinBERT):** Dense sentence-transformer embeddings mapping user interest vectors against tweet text.
 
 ## 2. Repository Structure & Modification Constraints
-* **`oasis/` (Core Engine):** Modify core baseline framework files with extreme caution. During early testing, we treated the TWIN-BERT engine as a strict black box. However, some hardcoded parameters (like the `max_rec_post_len` feed quota) are not ideal for all tests and may require adjustment. Any modifications to the core engine must be heavily documented and preserve backward compatibility with our existing experiments.
-* **`scratch/` (Phase 1 - Deterministic Tests):** Contains isolated python scripts testing topological vulnerabilities using `model=None` (dummy agents).
-* **`data/`**: Contains generated synthetic JSON profiles and SQLite `.db` environments.
-* **`cib_zoo/` (Phase 2 - LLM Attacks):** Contains the scaffolding for autonomous LLM botnets.
 
-## 3. Phase 1: Completed Work (The Deterministic Baseline)
-We have successfully mapped the mathematical boundaries of the TWIN-BERT algorithm using deterministic dummy agents (`model=None`). We discovered:
-1. **The Feed Quota Bottleneck:** The environment currently restricts algorithmic feeds to `k=2` (`max_rec_post_len=2`). This hyper-competitive state perfectly mimics the real-world difficulty of displacing local organic noise.
-2. **Graph > Content:** "Semantic Smuggling" (hashtag hijacking) fails. The Graph Tower acts as a hard veto over the NLP Tower.
-3. **The 2-Hop Penalty:** "Information Laundering" (using an intermediary influencer hub to bridge a gap) fails. The mathematical decay of a 2-hop edge prevents the payload from beating 1-hop organic content.
-4. **The Ultimate Vulnerability:** The *only* mathematically viable attack vector is **Direct 1-Hop Parasitic Infiltration**. An attacker must successfully forge a direct `follow` edge with an organic user to bypass the quarantine.
+- **`oasis/` (Core Engine):** Contains OASIS platform logic. `platform.py` coordinates environment ticks and feed assembly. `oasis/social_platform/gorse_client.py` handles delta-syncing state to Gorse.
+- **`gorse_config.toml`:** Configuration for the embedded Gorse engine. Configured with:
+  `explore_recommend = { popular = 0.3, latest = 0.2, collaborative = 0.5 }`.
+- **`cib_zoo/` (Phase 2 - LLM & Behavioral Attacks):** Contains modular botnet attack implementations (Like Farms, Comment Raids, Hashtag Hijackers, Repost Botnets, and Sleeper Cells).
+- **`data/`:** Contains generated synthetic JSON profiles (`synthetic_bridge.json`) and SQLite simulation artifacts.
+- **`scratch/`:** Empirical test harnesses, diagnostic scripts, and time-series telemetry.
 
-## 4. Technical Methodology (How to write tests here)
-If the user asks you to write a new deterministic experiment, follow this execution pattern:
-1. **Semantic Anchoring:** Generate a customized JSON profile defining explicit clusters (e.g., `Tech` vs `Sports`) and pass it to `generate_reddit_agent_graph(profile_path, model=None)`.
-2. **Topological Injection:** *Do not* use the random graph generator. Open a direct `sqlite3` connection to the environment's `.db` and explicitly wire the `follow` table using `INSERT INTO follow` to force precise topologies (e.g., Sleeper Cells, Isolated Echo Chambers).
-3. **Synchronized Attacks:** Use native `ManualAction` injections within the `env.step()` loop to force the botnets to drop payloads and mass-`LIKE` them synchronously.
-4. **Real-Time Telemetry:** Bypass standard log parsers. Hook directly into the SQLite database during the simulation loop and query the `rec` table (e.g., `SELECT COUNT(DISTINCT user_id) FROM rec`) to track cross-community reach instantly.
+## 3. Key Findings & Empirical Discoveries
 
-## 5. Future Roadmap (Phase 2 & Beyond)
-*Note: This is a directional roadmap, not a rigid set of instructions that reading agents must immediately execute. Always follow the user's explicit prompts over these general goals.*
+1. **The TwinBERT Veto (Phase 1):** In pure semantic two-tower models, content is quarantined if topological or keyword proximity is missing. However, relying purely on TwinBERT creates aggressive echo chambers.
+2. **The Pure-Gorse Recency Trap:** When testing pure Gorse without semantic constraints, brand-new posts achieve a 100% breach of foreign clusters due to Gorse's default `latest` cold-start exploration fallback, rendering naive like-farming artificially overpowered.
+3. **The 60/40 Twitter-Like Hybrid Solution:**
+   To accurately mirror Twitter's open-sourced "For You" architecture, the platform combines Gorse (60%) and TwinBERT (40%):
+   $$\text{Total Score} = 0.40 \cdot S_{\text{TwinBERT}} + 0.30 \cdot S_{\text{CF}} + 0.18 \cdot S_{\text{Pop}} + 0.12 \cdot S_{\text{Rec}}$$
+   This prevents trivial recency spam while allowing authentic viral or bridged crossover content to propagate.
 
-* **Objective A: Transition to LLMs (Complex Contagion)**
-  Because Phase 1 proved that a 1-hop structural edge is mathematically required to bypass the TWIN-BERT algorithm, the next goal for the `TargetingEngine` inside `cib_zoo/` is to test if LLM agents can successfully execute **Parasitic Infiltration**: scanning organic user bios, generating hyper-targeted empathetic replies, and actively socially engineering organic agents into forging the required 1-hop topological bridges. 
+## 4. Technical Methodology & HPC (FEP) Workflow
 
-* **Objective B: Recommender Engine Migration (The "Gorse" Pivot)**
-  We are evaluating if TWIN-BERT is too computationally heavy or statistically rigid for large-scale simulations. The architectural roadmap includes abstracting the `Recommender` interface and pivoting to **Gorse** (a scalable, open-source ensemble filtering engine). Agents should be prepared to integrate Gorse's REST APIs, which support multi-source blending and LLM-based reranking (opening up advanced "Prompt Injection" vulnerabilities).
+1. **Monolithic Docker Deployment:**
+   The `Dockerfile` embeds `gorse-in-one` into the container's entrypoint (`entrypoint.sh`). When the container runs, Gorse automatically boots in the background at `http://127.0.0.1:8088` before the Python simulation begins.
+2. **Preserving Dual Databases as an Experiment Bundle:**
+   OASIS writes platform state to `twitter_simulation.db`, while Gorse writes interaction matrices to `gorse_data.db` and precomputed caches to `gorse_cache.db`. **Do not attempt to merge these into a single SQLite file**; doing so causes multi-process write-lock crashes and destroys compatibility with Gorse's native web dashboard. Store them together in a run folder for local post-hoc visualization via `gorse-in-one -c gorse_config.toml`.
+3. **CI/Linting Pipeline:**
+   The CI pipeline relies strictly on **Ruff** (`ruff check .`, `ruff format --check .`) and **yamllint** with a custom `.yamllint` ignoring binary virtual environments. Strict pre-commit hooks and flake8 have been deprecated.
 
-* **Objective C: HPC Containerization ("Simulation-in-a-Box")**
-  To support massive scale and guarantee absolute reproducibility on High-Performance Computing (HPC) clusters, the entire simulation ecosystem (OASIS + Gorse + LLM dependencies) will be Dockerized into a single monolithic image. This ensures the environment can be pulled natively via Apptainer/Singularity without dependency hell. Future agents configuring this setup must design the entrypoint script to seamlessly boot the Gorse backend before launching the Python OASIS frontend.
+## 5. Active Roadmap (Phase 2: Complex Contagion & LLM Botnets)
+
+- **Objective A: Implement the 60/40 Blended Ranker:** Finalize the unified candidate scoring pipeline merging SQL in-network candidates with Gorse out-of-network candidates evaluated by TwinBERT.
+- **Objective B: Deploy Advanced CIB Botnets (`cib_zoo/`):**
+  - **The Semantic Smuggler:** LLM-driven adversarial rewriting of `#tech` payloads to align with `#sports` TwinBERT vectors.
+  - **The Organic Bridger / Sleeper Cell:** Bots that spend time establishing genuine collaborative filtering overlap in the target community before dropping propaganda.
+  - **2-Hop Social Proof Hijackers:** Bots engineering engagement from mutual bridge accounts to exploit in-network feed injection.
+- **Objective C: Scaled Simulation on FEP:** Execute multi-step cascade experiments on the HPC cluster using the containerized image and export full telemetry bundles.

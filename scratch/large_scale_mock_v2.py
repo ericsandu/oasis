@@ -1,5 +1,3 @@
-# flake8: noqa
-# ruff: noqa
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 # Licensed under the Apache License, Version 2.0 (the “License”);
 # you may not use this file except in compliance with the License.
@@ -21,10 +19,10 @@ import sqlite3
 
 import matplotlib.pyplot as plt
 
-
 import oasis
 from oasis import ActionType, ManualAction, generate_reddit_agent_graph
 from oasis.social_platform.typing import DefaultPlatformType
+
 os.environ["OPENAI_API_KEY"] = "sk-mock-key"
 
 
@@ -169,7 +167,7 @@ def generate_plots(steps, reach, align_op, disj_op, cost):
     ax2.plot(steps, align_op, marker='s', color='#00ffcc', linewidth=2, label='Aligned Sub-graph')
     ax2.plot(steps, disj_op, marker='x', color='#ff3366', linewidth=2, label='Disjunct Sub-graph')
     ax2.axvline(x=2.5, color='gray', linestyle='--')
-    ax2.set_title('Polarized Opinion Drift ($\Delta E$)')
+    ax2.set_title(r'Polarized Opinion Drift ($\Delta E$)')
     ax2.set_xlabel('Step')
     ax2.set_ylabel('Avg Belief')
     ax2.set_ylim(-0.2, 1.0)

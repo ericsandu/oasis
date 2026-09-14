@@ -1,5 +1,3 @@
-# flake8: noqa
-# ruff: noqa
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 # Licensed under the Apache License, Version 2.0 (the “License”);
 # you may not use this file except in compliance with the License.
@@ -22,10 +20,10 @@ import sqlite3
 import matplotlib.pyplot as plt
 
 # Mock API key to bypass camel-ai checks
-
 import oasis
 from oasis import ActionType, ManualAction, generate_reddit_agent_graph
 from oasis.social_platform.typing import DefaultPlatformType
+
 os.environ["OPENAI_API_KEY"] = "sk-mock-key"
 
 
@@ -163,7 +161,7 @@ def generate_plots(steps, reach, opinions, cost):
 
     ax2.plot(steps, opinions, marker='s', color='green', linewidth=2)
     ax2.axvline(x=3.5, color='gray', linestyle='--', alpha=0.5)
-    ax2.set_title('Internal Opinion Drift ($\Delta E$)')
+    ax2.set_title(r'Internal Opinion Drift ($\Delta E$)')
     ax2.set_xlabel('Simulation Step')
     ax2.set_ylabel('Avg Societal Belief')
 
