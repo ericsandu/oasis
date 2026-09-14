@@ -20,7 +20,7 @@ import time
 from ast import literal_eval
 from datetime import datetime
 from math import log
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import torch
@@ -28,8 +28,7 @@ from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from .process_recsys_posts import (generate_post_vector,
-                                   generate_post_vector_openai)
+from .process_recsys_posts import generate_post_vector, generate_post_vector_openai
 from .typing import ActionType, RecsysType
 
 rec_log = logging.getLogger(name='social.rec')
@@ -133,8 +132,8 @@ def reset_globals():
     date_score = []
 
 
-def rec_sys_random(post_table: List[Dict[str, Any]], rec_matrix: List[List],
-                   max_rec_post_len: int) -> List[List]:
+def rec_sys_random(post_table: list[dict[str, Any]], rec_matrix: list[list],
+                   max_rec_post_len: int) -> list[list]:
     """
     Randomly recommend posts to users.
 
@@ -210,8 +209,8 @@ def get_recommendations(
     return recommended_items
 
 
-def rec_sys_reddit(post_table: List[Dict[str, Any]], rec_matrix: List[List],
-                   max_rec_post_len: int) -> List[List]:
+def rec_sys_reddit(post_table: list[dict[str, Any]], rec_matrix: list[list],
+                   max_rec_post_len: int) -> list[list]:
     """
     Recommend posts based on Reddit-like hot score.
 
@@ -259,11 +258,11 @@ def rec_sys_reddit(post_table: List[Dict[str, Any]], rec_matrix: List[List],
     return new_rec_matrix
 
 
-def rec_sys_personalized(user_table: List[Dict[str, Any]],
-                         post_table: List[Dict[str, Any]],
-                         trace_table: List[Dict[str,
-                                                Any]], rec_matrix: List[List],
-                         max_rec_post_len: int) -> List[List]:
+def rec_sys_personalized(user_table: list[dict[str, Any]],
+                         post_table: list[dict[str, Any]],
+                         trace_table: list[dict[str,
+                                                Any]], rec_matrix: list[list],
+                         max_rec_post_len: int) -> list[list]:
     """
     Recommend posts based on personalized similarity scores.
 
@@ -417,17 +416,17 @@ def coarse_filtering(input_list, scale):
 
 
 def rec_sys_personalized_twh(
-        user_table: List[Dict[str, Any]],
-        post_table: List[Dict[str, Any]],
+        user_table: list[dict[str, Any]],
+        post_table: list[dict[str, Any]],
         latest_post_count: int,
-        trace_table: List[Dict[str, Any]],
-        rec_matrix: List[List],
+        trace_table: list[dict[str, Any]],
+        rec_matrix: list[list],
         max_rec_post_len: int,
         current_time: int,
         # source_post_indexs: List[int],
         recall_only: bool = False,
         enable_like_score: bool = False,
-        use_openai_embedding: bool = False) -> List[List]:
+        use_openai_embedding: bool = False) -> list[list]:
     global twhin_model, twhin_tokenizer
     if twhin_model is None or twhin_tokenizer is None:
         twhin_tokenizer, twhin_model = get_recsys_model(
@@ -561,7 +560,7 @@ def rec_sys_personalized_twh(
                 like_posts_vectors = torch.stack(like_posts_vectors).view(
                     len(user_table), 5, posts_vector.shape[1])
             except Exception:
-                import pdb  # noqa: F811
+                import pdb
                 pdb.set_trace()
         get_similar_start_t = time.time()
         cosine_similarities = cosine_similarity(user_vector, posts_vector)
@@ -680,13 +679,13 @@ def get_trace_contents(user_id, action, post_table, trace_table):
 
 
 def rec_sys_personalized_with_trace(
-    user_table: List[Dict[str, Any]],
-    post_table: List[Dict[str, Any]],
-    trace_table: List[Dict[str, Any]],
-    rec_matrix: List[List],
+    user_table: list[dict[str, Any]],
+    post_table: list[dict[str, Any]],
+    trace_table: list[dict[str, Any]],
+    rec_matrix: list[list],
     max_rec_post_len: int,
     swap_rate: float = 0.1,
-) -> List[List]:
+) -> list[list]:
     """
     This version:
     1. If the number of posts is less than or equal to the maximum

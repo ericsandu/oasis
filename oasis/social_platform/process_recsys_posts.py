@@ -11,7 +11,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
-from typing import List
 
 import torch
 from camel.embeddings import OpenAIEmbedding
@@ -22,7 +21,7 @@ from transformers import AutoModel, AutoTokenizer
 # Function: Process each batch
 @torch.no_grad()
 def process_batch(model: AutoModel, tokenizer: AutoTokenizer,
-                  batch_texts: List[str]):
+                  batch_texts: list[str]):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     inputs = tokenizer(batch_texts,
                        return_tensors="pt",
@@ -46,7 +45,7 @@ def generate_post_vector(model: AutoModel, tokenizer: AutoTokenizer, texts,
     return all_outputs_tensor.cpu()
 
 
-def generate_post_vector_openai(texts: List[str], batch_size: int = 100):
+def generate_post_vector_openai(texts: list[str], batch_size: int = 100):
     """
     Generate embeddings using OpenAI API
 

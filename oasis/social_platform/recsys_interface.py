@@ -12,7 +12,7 @@
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any
 
 
 class RecsysInterface(ABC):
@@ -24,9 +24,9 @@ class RecsysInterface(ABC):
     @abstractmethod
     def update_rec_table(
         self,
-        user_table: List[Dict[str, Any]],
-        post_table: List[Dict[str, Any]],
-        trace_table: List[Dict[str, Any]],
+        user_table: list[dict[str, Any]],
+        post_table: list[dict[str, Any]],
+        trace_table: list[dict[str, Any]],
         rec_matrix: Any,
         max_rec_post_len: int,
     ) -> Any:
@@ -34,4 +34,3 @@ class RecsysInterface(ABC):
         Takes the current state of users, posts, and traces,
         and returns the updated recommendation matrix.
         """
-        pass

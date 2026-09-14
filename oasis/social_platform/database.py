@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import os.path as osp
 import sqlite3
-from typing import Any, Dict, List
+from typing import Any
 
 SCHEMA_DIR = "social_platform/schema"
 DB_DIR = "data"
@@ -247,14 +247,14 @@ def print_db_tables_summary():
 
 
 def fetch_table_from_db(cursor: sqlite3.Cursor,
-                        table_name: str) -> List[Dict[str, Any]]:
+                        table_name: str) -> list[dict[str, Any]]:
     cursor.execute(f"SELECT * FROM {table_name}")
     columns = [description[0] for description in cursor.description]
     data_dicts = [dict(zip(columns, row)) for row in cursor.fetchall()]
     return data_dicts
 
 
-def fetch_rec_table_as_matrix(cursor: sqlite3.Cursor) -> List[List[int]]:
+def fetch_rec_table_as_matrix(cursor: sqlite3.Cursor) -> list[list[int]]:
     # First, query all user_ids from the user table, assuming they start from
     # 1 and are consecutive
     cursor.execute("SELECT user_id FROM user ORDER BY user_id")
@@ -276,7 +276,7 @@ def fetch_rec_table_as_matrix(cursor: sqlite3.Cursor) -> List[List[int]]:
 
 
 def insert_matrix_into_rec_table(cursor: sqlite3.Cursor,
-                                 matrix: List[List[int]]) -> None:
+                                 matrix: list[list[int]]) -> None:
     # Iterate through the matrix, skipping the placeholder at index 0
     for user_id, post_ids in enumerate(matrix, start=1):
         # Adjusted to start counting from 1

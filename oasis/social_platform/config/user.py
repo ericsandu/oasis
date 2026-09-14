@@ -11,7 +11,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
-# flake8: noqa: E501
 import warnings
 from dataclasses import dataclass
 from typing import Any
@@ -52,9 +51,7 @@ class UserInfo:
         description_string = ""
         if self.name is not None:
             name_string = f"Your name is {self.name}."
-        if self.profile is None:
-            description = name_string
-        elif "other_info" not in self.profile:
+        if self.profile is None or "other_info" not in self.profile:
             description = name_string
         elif "user_profile" in self.profile["other_info"]:
             if self.profile["other_info"]["user_profile"] is not None:
@@ -81,9 +78,7 @@ Please perform actions by tool calling.
         description_string = ""
         if self.name is not None:
             name_string = f"Your name is {self.name}."
-        if self.profile is None:
-            description = name_string
-        elif "other_info" not in self.profile:
+        if self.profile is None or "other_info" not in self.profile:
             description = name_string
         elif "user_profile" in self.profile["other_info"]:
             if self.profile["other_info"]["user_profile"] is not None:
