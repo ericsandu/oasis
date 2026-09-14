@@ -98,20 +98,14 @@ class MockChannel:
             # Assert the success message for the like operation
             assert message[2]["success"] is True
             assert "like_id" in message[2]
-        elif self.call_count == 3:
-            assert message[2]["success"] is True
-            assert "like_id" in message[2]
-        elif self.call_count == 4:
+        elif self.call_count == 3 or self.call_count == 4:
             assert message[2]["success"] is True
             assert "like_id" in message[2]
         elif self.call_count == 5:
             # Assert the success message for the like operation
             assert message[2]["success"] is True
             assert "dislike_id" in message[2]
-        elif self.call_count == 6:
-            assert message[2]["success"] is True
-            assert "dislike_id" in message[2]
-        elif self.call_count == 7:
+        elif self.call_count == 6 or self.call_count == 7:
             assert message[2]["success"] is True
             assert "dislike_id" in message[2]
         elif self.call_count == 8:
@@ -132,11 +126,7 @@ class MockChannel:
         elif self.call_count == 12:
             assert message[2]["success"] is True
             assert "post_id" in message[2]
-        elif self.call_count == 13:
-            # Assert the success message for a repost
-            assert message[2]["success"] is True
-            assert "post_id" in message[2]
-        elif self.call_count == 14:
+        elif self.call_count == 13 or self.call_count == 14:
             # Assert the success message for a repost
             assert message[2]["success"] is True
             assert "post_id" in message[2]

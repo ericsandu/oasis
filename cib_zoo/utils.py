@@ -1,5 +1,3 @@
-# flake8: noqa
-# ruff: noqa
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 # Licensed under the Apache License, Version 2.0 (the “License”);
 # you may not use this file except in compliance with the License.
@@ -14,10 +12,10 @@
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 import sqlite3
-from typing import Any, Dict, List
+from typing import Any
 
 
-def get_target_posts(db_path: str, target_type: str, target_val: str) -> List[Dict[str, Any]]:
+def get_target_posts(db_path: str, target_type: str, target_val: str) -> list[dict[str, Any]]:
     """
     Query the sqlite db to find target posts based on a criteria.
     target_type can be 'post_id', 'user_id', or 'tag/category'.

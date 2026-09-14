@@ -16,14 +16,19 @@ from unittest.mock import patch
 
 import numpy as np
 
-from oasis.social_platform.recsys import (calculate_hot_score,
-                                          calculate_like_similarity,
-                                          coarse_filtering, get_like_post_id,
-                                          normalize_similarity_adjustments,
-                                          rec_sys_personalized,
-                                          rec_sys_personalized_twh,
-                                          rec_sys_random, rec_sys_reddit,
-                                          reset_globals, swap_random_posts)
+from oasis.social_platform.recsys import (
+    calculate_hot_score,
+    calculate_like_similarity,
+    coarse_filtering,
+    get_like_post_id,
+    normalize_similarity_adjustments,
+    rec_sys_personalized,
+    rec_sys_personalized_twh,
+    rec_sys_random,
+    rec_sys_reddit,
+    reset_globals,
+    swap_random_posts,
+)
 
 
 def _trace(user_id, action, post_id):

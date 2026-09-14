@@ -41,7 +41,7 @@ def rank_comments_vllm(path1, path2, output_path):
 Helen is a successful writer who usually writes popular western novels. Now, she has an idea for a new novel that could really make a big impact. If it works out, it could greatly improve her career. But if it fails, she will have spent a lot of time and effort for nothing.
 
 What do you think Helen should do?
-"""  # noqa: E501
+"""
 
         # system_prompt = """"""
 
@@ -60,7 +60,7 @@ What do you think Helen should do?
         [Response Format]
         Reason:
         Choice: Answer1 or Answer2 or neutral
-"""  # noqa: E501
+"""
 
         Baseurl = "XXXXX"
         Skey = "XXXXXX"

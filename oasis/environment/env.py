@@ -15,7 +15,6 @@ import asyncio
 import logging
 import os
 from datetime import datetime
-from typing import List, Union
 
 from oasis.environment.env_action import LLMAction, ManualAction
 from oasis.social_agent.agent import SocialAgent
@@ -23,8 +22,7 @@ from oasis.social_agent.agent_graph import AgentGraph
 from oasis.social_agent.agents_generator import generate_custom_agents
 from oasis.social_platform.channel import Channel
 from oasis.social_platform.platform import Platform
-from oasis.social_platform.typing import (ActionType, DefaultPlatformType,
-                                          RecsysType)
+from oasis.social_platform.typing import ActionType, DefaultPlatformType, RecsysType
 
 # Create log directory if it doesn't exist
 log_dir = "./log"
@@ -50,7 +48,7 @@ class OasisEnv:
     def __init__(
         self,
         agent_graph: AgentGraph,
-        platform: Union[DefaultPlatformType, Platform],
+        platform: DefaultPlatformType | Platform,
         database_path: str = None,
         semaphore: int = 128,
     ) -> None:
@@ -134,9 +132,7 @@ class OasisEnv:
             return await agent.perform_interview(interview_prompt)
 
     async def step(
-        self, actions: dict[SocialAgent, Union[ManualAction, LLMAction,
-                                               List[Union[ManualAction,
-                                                          LLMAction]]]]
+        self, actions: dict[SocialAgent, ManualAction | LLMAction | list[ManualAction | LLMAction]]
     ) -> None:
         r"""Update the recommendation system and perform the actions.
 

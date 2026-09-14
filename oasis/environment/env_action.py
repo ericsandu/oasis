@@ -12,7 +12,7 @@
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 from oasis.social_platform.typing import ActionType
 
@@ -30,7 +30,7 @@ class ManualAction:
             `https://github.com/camel-ai/oasis/blob/main/oasis/social_agent/agent_action.py`.
     """
     action_type: ActionType
-    action_args: Dict[str, Any]
+    action_args: dict[str, Any]
 
     def init(self, action_type, action_args):
         self.action_type = action_type

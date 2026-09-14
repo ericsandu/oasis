@@ -1,56 +1,65 @@
 # Phase 1 Experiments: Topological Vulnerabilities in Neural Recommender Systems
 
 ## Overview
-This document details the intrinsic mechanics, experimental setups, and algorithmic deductions of the Phase 1 Coordinated Inauthentic Behavior (CIB) simulations. 
+
+This document details the intrinsic mechanics, experimental setups, and algorithmic deductions of the Phase 1 Coordinated Inauthentic Behavior (CIB) simulations.
 
 All experiments were conducted within the **OASIS** framework using a **TWIN-BERT** dual-tower neural recommender system. To perfectly isolate algorithmic variables and eliminate Large Language Model (LLM) hallucination noise, all agents in this phase operated as deterministic state-machines (`model=None`), utilizing raw SQLite injection to explicitly map network graph typologies.
 
----
+______________________________________________________________________
 
 ## Experiment 1: The Baseline Quarantine (0-Hop Brute Force)
-* **Script:** `scratch/large_scale_mock.py`
-* **Setup:** We initialized two strictly disconnected semantic clusters (e.g., Tech vs. Sports). A botnet dropped a malicious payload and pumped massive, coordinated engagement (Likes) onto it from outside the target's structural graph.
-* **Result:** **0% Reach.** 
-* **Deduction (The Topological Firewall):** Modern neural recommenders completely neutralize raw volume metrics. Engagement generated outside an organic user's structural neighborhood (0-hop) is mathematically invisible. "Going viral" via sheer botnet scale is an obsolete attack vector.
+
+- **Script:** `scratch/large_scale_mock.py`
+- **Setup:** We initialized two strictly disconnected semantic clusters (e.g., Tech vs. Sports). A botnet dropped a malicious payload and pumped massive, coordinated engagement (Likes) onto it from outside the target's structural graph.
+- **Result:** **0% Reach.**
+- **Deduction (The Topological Firewall):** Modern neural recommenders completely neutralize raw volume metrics. Engagement generated outside an organic user's structural neighborhood (0-hop) is mathematically invisible. "Going viral" via sheer botnet scale is an obsolete attack vector.
 
 ## Experiment 2: Direct 1-Hop Parasitic Infiltration
-* **Script:** `scratch/cross_community_cib.py`
-* **Setup:** Prior to the payload drop, bots actively forced 1-hop mutual `follow` edges with targeted organic users (simulating a "Follow-Back" social engineering campaign). The payload was then deployed and engaged with by the botnet.
-* **Result:** **Immediate Primary Exposure** (Payload successfully breached the target feeds).
-* **Deduction (Structural Override):** The algorithm surrenders to explicit 1-hop edges. An attacker *must* infiltrate the target's structural graph to bypass the quarantine. 
+
+- **Script:** `scratch/cross_community_cib.py`
+- **Setup:** Prior to the payload drop, bots actively forced 1-hop mutual `follow` edges with targeted organic users (simulating a "Follow-Back" social engineering campaign). The payload was then deployed and engaged with by the botnet.
+- **Result:** **Immediate Primary Exposure** (Payload successfully breached the target feeds).
+- **Deduction (Structural Override):** The algorithm surrenders to explicit 1-hop edges. An attacker *must* infiltrate the target's structural graph to bypass the quarantine.
 
 ## Experiment 3: Secondary Contagion (Organic Spillover)
-* **Script:** `scratch/cross_community_cib_organic.py`
-* **Setup:** Building on Exp 2, the primary hosts (organic users successfully infected via 1-hop edges) were programmed to stochastically `LIKE` the propaganda in their feeds (30% probability). The goal was to see if the infection would spill over to their followers (2-hop).
-* **Result:** **Failed (Flatline at Primary Hosts).**
-* **Deduction (The Feed Quota Penalty):** Because the algorithm restricts feeds to highly competitive local quotas (e.g., $k=2$), a stochastic "Like" from a host generates insufficient algorithmic gravity. Secondary contagion requires the host to execute a high-friction action (like explicitly *Reposting* the payload) to override benign local organic noise.
+
+- **Script:** `scratch/cross_community_cib_organic.py`
+- **Setup:** Building on Exp 2, the primary hosts (organic users successfully infected via 1-hop edges) were programmed to stochastically `LIKE` the propaganda in their feeds (30% probability). The goal was to see if the infection would spill over to their followers (2-hop).
+- **Result:** **Failed (Flatline at Primary Hosts).**
+- **Deduction (The Feed Quota Penalty):** Because the algorithm restricts feeds to highly competitive local quotas (e.g., $k=2$), a stochastic "Like" from a host generates insufficient algorithmic gravity. Secondary contagion requires the host to execute a high-friction action (like explicitly *Reposting* the payload) to override benign local organic noise.
 
 ## Experiment 4: Sybil Density & Sleeper Cells
-* **Script:** `scratch/sleeper_cell_cib.py`
-* **Setup:** We embedded 10 sleeper bots natively within a target cluster of 60 highly active organic users. The sleeper bots perfectly mimicked the target's follow-graph. A synchronized multi-demographic strike was launched on a payload.
-* **Result:** **Failed (0% Reach).**
-* **Deduction (Density Thresholds):** Neural recommenders constantly evaluate mathematical proximity against local content volume. The algorithmic gravity of 10 sleeper bots was completely drowned out by the 1-hop organic posts generated by the 60 active local users. CIB success relies on a strict ratio: botnet volume must mathematically out-density the organic content creation rate of the target demographic.
+
+- **Script:** `scratch/sleeper_cell_cib.py`
+- **Setup:** We embedded 10 sleeper bots natively within a target cluster of 60 highly active organic users. The sleeper bots perfectly mimicked the target's follow-graph. A synchronized multi-demographic strike was launched on a payload.
+- **Result:** **Failed (0% Reach).**
+- **Deduction (Density Thresholds):** Neural recommenders constantly evaluate mathematical proximity against local content volume. The algorithmic gravity of 10 sleeper bots was completely drowned out by the 1-hop organic posts generated by the 60 active local users. CIB success relies on a strict ratio: botnet volume must mathematically out-density the organic content creation rate of the target demographic.
 
 ## Experiment 5: Semantic Smuggling (Hashtag Hijacking)
-* **Script:** `scratch/semantic_smuggling_cib.py`
-* **Setup:** We isolated the NLP Tower from the Graph Tower. A botnet dropped a payload into the Tech cluster, but explicitly injected Sports jargon and hashtags (`#sports`, "touchdown") into the text. This shifted the payload's 768-dimensional NLP embedding to perfectly mimic Sports content.
-* **Result:** **Failed (0% Reach).**
-* **Deduction (Graph > Content):** In a dual-tower system, the Graph Tower acts as a hard veto. Even when the algorithm perfectly categorizes the payload as highly relevant to the target community (Semantic alignment), it enforces a strict quarantine if the nodes lack structural proximity (Topological alignment). Content is not king; Topology is king.
+
+- **Script:** `scratch/semantic_smuggling_cib.py`
+- **Setup:** We isolated the NLP Tower from the Graph Tower. A botnet dropped a payload into the Tech cluster, but explicitly injected Sports jargon and hashtags (`#sports`, "touchdown") into the text. This shifted the payload's 768-dimensional NLP embedding to perfectly mimic Sports content.
+- **Result:** **Failed (0% Reach).**
+- **Deduction (Graph > Content):** In a dual-tower system, the Graph Tower acts as a hard veto. Even when the algorithm perfectly categorizes the payload as highly relevant to the target community (Semantic alignment), it enforces a strict quarantine if the nodes lack structural proximity (Topological alignment). Content is not king; Topology is king.
 
 ## Experiment 6: Information Laundering (Organic Bridging)
-* **Script:** `scratch/organic_bridging_cib.py`
-* **Setup:** We tested Triadic Closure via Hub Influencers. A "Tech Hub" (followed only by Tech users) posted propaganda. A "Sports Hub" (followed only by Sports users) liked it. The two Hubs mutually followed each other, creating a strict 2-hop bridge between the two organic clusters.
-* **Result:** **Failed (0% Reach in Organic Sports Cluster).**
-* **Deduction (Exponential Hop-Decay):** Information laundering fails in highly restrictive feed limits ($k=2$). The 2-hop endorsement (Sports Hub liking Tech Hub) degrades exponentially in mathematical scoring. The algorithm overwhelmingly prioritized 1-hop benign posts from direct peers over the 2-hop influencer signal.
 
----
+- **Script:** `scratch/organic_bridging_cib.py`
+- **Setup:** We tested Triadic Closure via Hub Influencers. A "Tech Hub" (followed only by Tech users) posted propaganda. A "Sports Hub" (followed only by Sports users) liked it. The two Hubs mutually followed each other, creating a strict 2-hop bridge between the two organic clusters.
+- **Result:** **Failed (0% Reach in Organic Sports Cluster).**
+- **Deduction (Exponential Hop-Decay):** Information laundering fails in highly restrictive feed limits ($k=2$). The 2-hop endorsement (Sports Hub liking Tech Hub) degrades exponentially in mathematical scoring. The algorithm overwhelmingly prioritized 1-hop benign posts from direct peers over the 2-hop influencer signal.
+
+______________________________________________________________________
 
 ## Final Phase 1 Synthesis
-By mapping these six deterministic stress-tests, we have mathematically proven the boundaries of the TWIN-BERT algorithm. 
 
-To execute a successful Coordinated Inauthentic Behavior campaign against a modern neural recommender, an attacker **cannot** rely on volume (Brute Force), content manipulation (Semantic Smuggling), or proxy-endorsements (Information Laundering). 
+By mapping these six deterministic stress-tests, we have mathematically proven the boundaries of the TWIN-BERT algorithm.
+
+To execute a successful Coordinated Inauthentic Behavior campaign against a modern neural recommender, an attacker **cannot** rely on volume (Brute Force), content manipulation (Semantic Smuggling), or proxy-endorsements (Information Laundering).
 
 The mathematical requirement for algorithmic contagion is **Direct 1-Hop Parasitic Infiltration**.
 
 ### Transition to Phase 2 (LLM Agents)
+
 Because deterministic systems cannot execute the psychological requirements of Parasitic Infiltration (they cannot actively persuade human agents to click "Follow"), Phase 2 of this research will activate Large Language Models (LLMs). The objective is to determine if autonomous LLM architectures can successfully socially engineer organic agents into forging the structural edges proven necessary in Phase 1.

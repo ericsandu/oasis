@@ -16,8 +16,9 @@ from __future__ import annotations
 import inspect
 import logging
 import sys
+from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from camel.agents import ChatAgent
 from camel.messages import BaseMessage
@@ -42,7 +43,7 @@ if "sphinx" not in sys.modules:
     if not agent_log.handlers:
         now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         file_handler = logging.FileHandler(
-            f"./log/social.agent-{str(now)}.log")
+            f"./log/social.agent-{now!s}.log")
         file_handler.setLevel("DEBUG")
         file_handler.setFormatter(
             logging.Formatter(
@@ -60,12 +61,10 @@ class SocialAgent(ChatAgent):
                  user_info: UserInfo,
                  user_info_template: TextPrompt | None = None,
                  channel: Channel | None = None,
-                 model: Optional[Union[BaseModelBackend,
-                                       List[BaseModelBackend],
-                                       ModelManager]] = None,
-                 agent_graph: "AgentGraph" = None,
+                 model: BaseModelBackend | list[BaseModelBackend] | ModelManager | None = None,
+                 agent_graph: AgentGraph = None,
                  available_actions: list[ActionType] = None,
-                 tools: Optional[List[Union[FunctionTool, Callable]]] = None,
+                 tools: list[FunctionTool | Callable] | None = None,
                  max_iteration: int = 1,
                  interview_record: bool = False):
         self.social_agent_id = agent_id

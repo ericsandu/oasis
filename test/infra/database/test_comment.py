@@ -66,22 +66,10 @@ class MockChannel:
         elif self.call_count == 2:
             assert message[2]["success"] is True
             assert "comment_id" in message[2]
-        elif self.call_count == 3:
+        elif self.call_count == 3 or self.call_count == 4 or self.call_count == 5:
             assert message[2]["success"] is True
             assert "comment_like_id" in message[2]
-        elif self.call_count == 4:
-            assert message[2]["success"] is True
-            assert "comment_like_id" in message[2]
-        elif self.call_count == 5:
-            assert message[2]["success"] is True
-            assert "comment_like_id" in message[2]
-        elif self.call_count == 6:
-            assert message[2]["success"] is True
-            assert "comment_dislike_id" in message[2]
-        elif self.call_count == 7:
-            assert message[2]["success"] is True
-            assert "comment_dislike_id" in message[2]
-        elif self.call_count == 8:
+        elif self.call_count == 6 or self.call_count == 7 or self.call_count == 8:
             assert message[2]["success"] is True
             assert "comment_dislike_id" in message[2]
 

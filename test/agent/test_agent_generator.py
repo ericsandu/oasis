@@ -20,8 +20,10 @@ import pytest
 from camel.models import ModelFactory
 from camel.types import ModelPlatformType
 
-from oasis.social_agent.agents_generator import (generate_agents,
-                                                 generate_controllable_agents)
+from oasis.social_agent.agents_generator import (
+    generate_agents,
+    generate_controllable_agents,
+)
 from oasis.social_platform.channel import Channel
 from oasis.social_platform.platform import Platform
 

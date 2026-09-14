@@ -11,7 +11,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
-from typing import List
 
 from camel.toolkits import FunctionTool
 
@@ -19,7 +18,7 @@ from oasis.social_agent.agent import SocialAction
 
 
 def test_transfer_to_openai_function():
-    action_funcs: List[FunctionTool] = [
+    action_funcs: list[FunctionTool] = [
         FunctionTool(func) for func in [
             SocialAction.sign_up,
             SocialAction.refresh,

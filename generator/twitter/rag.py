@@ -104,7 +104,7 @@ topic_template = """Based on the provided personality traits, age, gender and pr
     [list of topic number]
 
     Ensure your output could be parsed to **list**, don't output anything else.
-    """  # noqa: E501
+    """
 
 topic_system = PromptTemplate(input_variables=["mbti", "age", "gender"],
                               template=topic_template)
@@ -147,7 +147,7 @@ Output:
     "persona": str, user persona,
 }}
 Ensure the output can be directly parsed to **JSON**, do not output anything else.
-"""  # noqa: E501
+"""
 
 
 def generate_user_profile(age, gender, mbti, profession, topics):

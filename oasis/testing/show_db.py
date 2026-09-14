@@ -18,7 +18,7 @@ from datetime import datetime
 table_log = logging.getLogger(name="table")
 table_log.setLevel("DEBUG")
 now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")  # Modify here
-file_handler = logging.FileHandler(f"./log/table-{str(now)}.log",
+file_handler = logging.FileHandler(f"./log/table-{now!s}.log",
                                    encoding="utf-8")
 file_handler.setLevel("DEBUG")
 file_handler.setFormatter(logging.Formatter("%(message)s"))

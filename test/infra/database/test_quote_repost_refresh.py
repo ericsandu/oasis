@@ -97,14 +97,9 @@ class MockChannel:
         elif self.call_count == 6:
             # Assert the success message for the like operation
             assert message[2]["success"] is True
-        elif self.call_count == 7:
+        elif self.call_count == 7 or self.call_count == 8:
             assert message[2]["success"] is True
-        elif self.call_count == 8:
-            assert message[2]["success"] is True
-        elif self.call_count == 9:
-            # Assert the success message for a repost
-            assert message[2]["success"] is True
-        elif self.call_count == 10:
+        elif self.call_count == 9 or self.call_count == 10:
             # Assert the success message for a repost
             assert message[2]["success"] is True
         elif self.call_count == 12:

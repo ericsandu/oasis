@@ -15,7 +15,6 @@ import os
 import pickle
 import sys
 from pathlib import Path
-from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -74,7 +73,7 @@ def get_xdb_data(db_paths, topic_name):
     return stats
 
 
-def get_all_xdb_data(db_folders: List):
+def get_all_xdb_data(db_folders: list):
     topics = os.listdir(f"data/simu_db/{db_folders[0]}")
     topics = [topic.split(".")[0] for topic in topics]
     # len(db_folders) == simulation results + real world propagation data  OR
@@ -106,7 +105,7 @@ def get_all_xdb_data(db_folders: List):
     ] for index in range(len(all_scale_lists))]
 
 
-def plot_rmse(db_folders: List, db_types: List):
+def plot_rmse(db_folders: list, db_types: list):
     stats = get_all_xdb_data(db_folders)
     stats_names = ["scale", "depth", "max breadth"]
 

@@ -1,5 +1,3 @@
-# flake8: noqa
-# ruff: noqa
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 # Licensed under the Apache License, Version 2.0 (the “License”);
 # you may not use this file except in compliance with the License.
@@ -13,12 +11,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
-from typing import Any, List
+from typing import Any
 
 from oasis import ActionType, ManualAction
 
 
-async def execute_hashtag_hijacking(env: Any, bot_ids: List[int], target_hashtag: str, num_posts: int):
+async def execute_hashtag_hijacking(env: Any, bot_ids: list[int], target_hashtag: str, num_posts: int):
     """
     Implements Hashtag Hijacking / Ephemeral Astroturfing.
     Bots push a keyword rapidly based on targeted topics to game the hot-score algorithm.

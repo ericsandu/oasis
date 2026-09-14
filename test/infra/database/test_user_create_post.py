@@ -120,7 +120,6 @@ async def test_signup_create_post(setup_platform):
         assert cursor.fetchone() is not None, "Create post action not traced"
 
     finally:
-        pass
         conn.close()
         if os.path.exists(test_db_filepath):
             os.remove(test_db_filepath)

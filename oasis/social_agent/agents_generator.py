@@ -16,7 +16,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
-from typing import List, Optional, Union
 
 import pandas as pd
 import tqdm
@@ -34,7 +33,7 @@ from oasis.social_platform.typing import ActionType
 async def generate_agents(
     agent_info_path: str,
     channel: Channel,
-    model: Union[BaseModelBackend, List[BaseModelBackend]],
+    model: BaseModelBackend | list[BaseModelBackend],
     start_time,
     recsys_type: str = "twitter",
     twitter: Platform = None,
@@ -180,11 +179,11 @@ async def generate_agents_100w(
     agent_info_path: str,
     channel: Channel,
     start_time,
-    model: Union[BaseModelBackend, List[BaseModelBackend]],
+    model: BaseModelBackend | list[BaseModelBackend],
     recsys_type: str = "twitter",
     twitter: Platform = None,
     available_actions: list[ActionType] = None,
-) -> List:
+) -> list:
     """ TODO: need update the description of args.
     Generate and return a dictionary of agents from the agent
     information CSV file. Each agent is added to the database and
@@ -435,8 +434,7 @@ async def generate_reddit_agents(
     agent_user_id_mapping: dict[int, int] | None = None,
     follow_post_agent: bool = False,
     mute_post_agent: bool = False,
-    model: Optional[Union[BaseModelBackend, List[BaseModelBackend],
-                          ModelManager]] = None,
+    model: BaseModelBackend | list[BaseModelBackend] | ModelManager | None = None,
     available_actions: list[ActionType] = None,
 ) -> AgentGraph:
     if agent_user_id_mapping is None:
@@ -566,8 +564,7 @@ async def generate_custom_agents(
 
 async def generate_reddit_agent_graph(
     profile_path: str,
-    model: Optional[Union[BaseModelBackend, List[BaseModelBackend],
-                          ModelManager]] = None,
+    model: BaseModelBackend | list[BaseModelBackend] | ModelManager | None = None,
     available_actions: list[ActionType] = None,
 ) -> AgentGraph:
     agent_graph = AgentGraph()
@@ -613,8 +610,7 @@ async def generate_reddit_agent_graph(
 
 async def generate_twitter_agent_graph(
     profile_path: str,
-    model: Optional[Union[BaseModelBackend, List[BaseModelBackend],
-                          ModelManager]] = None,
+    model: BaseModelBackend | list[BaseModelBackend] | ModelManager | None = None,
     available_actions: list[ActionType] = None,
 ) -> AgentGraph:
     agent_info = pd.read_csv(profile_path)

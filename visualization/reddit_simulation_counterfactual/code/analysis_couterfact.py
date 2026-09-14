@@ -124,7 +124,7 @@ async def process_database(db_file):
                             }}
 
                             Ensure the "score" is a single integer between 1 and 10.
-                            """  # noqa: E501
+                            """
 
                             tasks.append(
                                 (time_step,

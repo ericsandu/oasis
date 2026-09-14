@@ -75,7 +75,7 @@ new_data = new_data.drop(['Unnamed: 0.1', 'Unnamed: 0', 'user_id'], axis=1)
 new_data = new_data.drop(
     ['created_at', 'followers_count', 'following_count', 'following_list'],
     axis=1)
-new_data['user_id'] = range(0, len(new_data))
+new_data['user_id'] = range(len(new_data))
 new_data = new_data.reset_index(drop=True)
 
 

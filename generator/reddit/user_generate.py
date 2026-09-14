@@ -114,7 +114,7 @@ def get_interested_topics(mbti, age, gender, country, profession):
         7. Fun: Activities or ideas that are light-hearted or amusing. This topic covers a wide range of entertainment choices and leisure activities that bring joy, laughter, and enjoyment to individuals and groups.
     Output:
     [list of topic numbers]
-    Ensure your output could be parsed to **list**, don't output anything else."""  # noqa: E501
+    Ensure your output could be parsed to **list**, don't output anything else."""
 
     response = client.chat.completions.create(model="gpt-3.5-turbo",
                                               messages=[{
@@ -141,7 +141,7 @@ def generate_user_profile(age, gender, mbti, profession, topics):
         "bio": "str",
         "persona": "str"
     }}
-    Ensure the output can be directly parsed to **JSON**, do not output anything else."""  # noqa: E501
+    Ensure the output can be directly parsed to **JSON**, do not output anything else."""
 
     response = client.chat.completions.create(model="gpt-3.5-turbo",
                                               messages=[{

@@ -122,8 +122,7 @@ class prop_graph:
                         self.G, source=self.root_id, depth_limit=depth +
                         1).nodes())) - sum(last_breadth_list)
             last_breadth_list.append(breadth)
-            if breadth > self.total_max_breadth:
-                self.total_max_breadth = breadth
+            self.total_max_breadth = max(self.total_max_breadth, breadth)
 
         undirect_G = self.G.to_undirected()
         self.total_structural_virality = nx.average_shortest_path_length(
@@ -255,8 +254,7 @@ class prop_graph:
                             sub_g, source=self.root_id, depth_limit=depth +
                             1).nodes())) - sum(last_breadth_list)
                 last_breadth_list.append(breadth)
-                if breadth > max_breadth:
-                    max_breadth = breadth
+                max_breadth = max(max_breadth, breadth)
             self.max_breadth_list.append(max_breadth)
 
         if self.viz:
