@@ -1,6 +1,6 @@
 # 🏛️ Architecture: Twitter-Like Hybrid Recommender & CIB Attack Catalog
 
-This document details the architectural specification of the **60/40 Hybrid Recommender System** designed for OASIS, along with a theoretical and empirical taxonomy of **Coordinated Inauthentic Behavior (CIB) attack vectors** and their predicted outcomes.
+This document details the architectural specification of the **60/40 Hybrid Recommender System** designed for OASIS, along with a theoretical and empirical taxonomy of **Coordinated Inauthentic Behavior (CIB) attack vectors**, their predicted outcomes under a **Black-Box Threat Model**, and the deployment plan for the UPB High-Performance Computing (HPC) grid.
 
 ______________________________________________________________________
 
@@ -48,109 +48,163 @@ Feed generation uses a **Two-Stage Candidate Funnel**:
 
 ---
 
-## Part 2: Taxonomy of CIB Attacks & Likely Outcomes
+### 3. The Black-Box Threat Model & Portfolio Theory of CIB
 
-Below is the theoretical analysis of how distinct botnet strategies will perform against this hybrid defense.
+In real-world security scenarios, attackers operate with zero white-box access to the recommender weights:
+
+$$\text{Score} = w_1 \cdot S_{\text{Semantics}} + w_2 \cdot S_{\text{Graph}} + w_3 \cdot S_{\text{Velocity}} \quad (\text{where } \sum w_i = 1)$$
+
+* **The Single-Vector Trap:** If an attacker bets 100% of their compute budget on volume ($S_{\text{Velocity}} = 1.0$), but the platform weighs velocity at only $18\%$, the attack collapses ($0.18$).
+* **Orthogonal Hedging (Portfolio Diversification):** If the attacker distributes their budget across all three orthogonal dimensions simultaneously:
+  $$\vec{S}_{\text{attack}} = (S_{\text{Semantics}} \approx 0.8, \, S_{\text{Graph}} \approx 0.8, \, S_{\text{Velocity}} \approx 0.8)$$
+  Because the dimensions are independent, **no matter what the platform's internal weights $(w_1, w_2, w_3)$ are**, the dot product is mathematically guaranteed to be high:
+  $$\text{Score} = w_1(0.8) + w_2(0.8) + w_3(0.8) = 0.8 \sum w_i = \mathbf{0.80}$$
+
+---
+
+### 4. Hashtag Vulnerability: TwinBERT vs. Gorse
+
+A key finding of this research is the stark difference in how dense NLP models and categorical recommenders handle hashtags:
+
+1. **TwinBERT (Dense Whole-Sentence Semantics):**
+   * Embeds the entire text into a continuous 768-dimensional latent space.
+   * Appending `#sports` to a 200-word cryptocurrency pitch only shifts the sentence embedding vector by a negligible margin ($\Delta \approx 0.03$). The payload is still classified as `#tech` and quarantined.
+2. **Gorse (Factorization Machines & Discrete Labels):**
+   * Gorse's CTR predictor treats `Item.Labels` as **discrete categorical one-hot tokens**.
+   * Appending `#sports` creates an un-diluted feature match: $\langle \mathbf{v}_{\text{user}}, \mathbf{v}_{\text{sports}} \rangle > 0$.
+   * **Result:** Gorse is significantly *more* vulnerable to naive hashtag hijacking than TwinBERT, because it lacks contextual semantics to recognize off-topic dissonance.
+
+---
+
+## Part 2: Comprehensive Taxonomy of CIB Attacks & Predicted Outcomes
 
 ```
-                                  [ CIB Attack Taxonomy ]
-                                             │
-      ┌──────────────────────┬───────────────┴──────────────┬──────────────────────┐
-      ▼                      ▼                              ▼                      ▼
-1. Blunt-Force Farm    2. Recency Exploit             3. Semantic Smuggler   4. Organic Bridger
-(Volume Only)          (Timing Only)                  (Content Optimization) (Graph Manipulation)
-[Outcome: QUARANTINED] [Outcome: HEAVILY DILUTED]     [Outcome: PARTIAL]     [Outcome: HIGH BREACH]
+                                      [ CIB Attack Catalog ]
+                                                 │
+      ┌───────────────────────────┬──────────────┴────────────┬───────────────────────────┐
+      ▼                           ▼                           ▼                           ▼
+[ Content / Semantic ]    [ Engagement Velocity ]     [ Graph & Topology ]        [ Multi-Vector Hybrid ]
+• Bio-Scraping Copyattack • Like-Farming Bursts       • Sleeper Organic Bridger   • Orthogonal Hedging
+• Hashtag Hijacking       • Reply Raid / Astroturf    • Co-Engagement Poisoning   • Sentinel-Tuned Bandit
+                          • Repost Cascade Botnets    • 2-Hop Social Proof Hijack • Trojan Horse (Apex)
 ```
 
 ---
 
-### Attack 1: The Naive Blunt-Force Like Farm
-* **Mechanism:** 20 bots immediately spam-like an out-of-domain `#tech` payload to game the algorithm into serving it to `#sports` users.
-* **Math Profile:**
-  * $S_{\text{TwinBERT}} = 0.0$ (Zero semantic relevance to sports)
-  * $S_{\text{CF}} = 0.0$ (Zero co-interaction overlap with sports users)
-  * $S_{\text{Pop}} = 1.0$ (Maximized by 20 bot likes $\rightarrow$ captures 18%)
-  * $S_{\text{Rec}} = 1.0$ (Fresh post $\rightarrow$ captures 12%)
-  * **Total Score:** $0.0 + 0.0 + 0.18 + 0.12 = \mathbf{0.30}$
-* **Predicted Outcome:** **QUARANTINED (0% to 5% Reach)**.
-* **Why:** In-domain organic sports posts easily achieve $> 0.60$ (40% semantic + 20-30% CF). A score of 0.30 is mathematically insufficient to break into the Top-10 feed.
+### Tier 1: Content & Semantic Manipulation Vectors
+
+#### ATK-1: Bio-Scraping Copyattack (Profile Mirroring)
+* **Mechanism:** Bot scrapes target community bios and embeds matching high-density n-grams directly into the payload text or metadata.
+* **Math Profile:** $S_{\text{TwinBERT}} \to 1.0$, $S_{\text{CF}} = 0.0$, $S_{\text{Pop}} = 0.0$.
+* **Total Score:** $0.40 \times 1.0 + 0.60 \times 0.0 = \mathbf{0.40}$ (plus 0.12 recency = $\mathbf{0.52}$).
+* **Predicted Outcome:** **QUARANTINED (< 10% reach)**.
+* **Why:** In-domain organic posts have both semantic alignment and collaborative filtering overlap ($> 0.70$), out-ranking the copyattack.
+
+#### ATK-2: Hashtag Hijacking & Keyword Co-opting
+* **Mechanism:** Prepending trending target community hashtags (`#SuperBowl`, `#WorldCup`) to out-of-domain payloads.
+* **Target Objective:** Exploits Gorse's Factorization Machine labels and category exploration.
+* **Predicted Outcome:** **MARGINAL (5% – 15% reach)**. Neutralized by TwinBERT's whole-sentence semantic check.
 
 ---
 
-### Attack 2: The Chronological / Cold-Start Exploit
-* **Mechanism:** An attacker drops a payload during a lull in organic publishing, attempting to exploit Gorse's recency fallback.
-* **Math Profile:**
-  * $S_{\text{Rec}} = 1.0$ (Captures 12%)
-  * $S_{\text{Pop}} = 0.0$
-  * $S_{\text{TwinBERT}} = 0.0$
-  * $S_{\text{CF}} = 0.0$
-  * **Total Score:** $\mathbf{0.12}$
-* **Predicted Outcome:** **FAILED / HEAVILY SUPPRESSED (< 1% Reach)**.
-* **Why:** Under our previous uncalibrated Gorse configuration (`latest = 0.3` without TwinBERT), this achieved a 100% breach. Under the 60/40 hybrid, a 12% freshness score cannot overcome the 40% semantic penalty.
+### Tier 2: Engagement Velocity & Momentum Vectors
+
+#### ATK-3: Like-Farming Bursts (`like_farm.py`)
+* **Mechanism:** $N$ bots synchronously like a target payload within 1 simulation step.
+* **Math Profile:** $S_{\text{Pop}} = 1.0$, $S_{\text{Rec}} = 1.0$, $S_{\text{TwinBERT}} = 0.0$, $S_{\text{CF}} = 0.0$.
+* **Total Score:** $0.18 + 0.12 = \mathbf{0.30}$.
+* **Predicted Outcome:** **QUARANTINED (< 5% reach)**. Volume alone cannot overcome the 70% penalty from missing semantics and collaborative history.
+
+#### ATK-4: Astroturfing Comment Spam & Reply Raids (`comment_raid.py`)
+* **Mechanism:** Bots bypass feed algorithms entirely by flooding the reply sections of the top 5 highest-reach organic posts with pre-scripted propaganda templates.
+* **Target Objective:** Parasitizes established organic viral inventory.
+* **Predicted Outcome:** **HIGH EXPOSURE (50% – 80% thread visibility)**. Extremely effective because reply threads are rendered chronologically without recommender candidate filtering.
+
+#### ATK-5: Repost Cascade Botnets (`repost_botnet.py`)
+* **Mechanism:** Multi-tiered hierarchy of bots quote-tweeting and retweeting the seed payload at staggered intervals.
+* **Target Objective:** Inflates $S_{\text{Pop}}$ while triggering in-network feed injection across the bot follower sub-network.
 
 ---
 
-### Attack 3: The Semantic Smuggler (LLM Adversarial Rewriting)
-* **Mechanism:** An LLM-powered bot rewrites the `#tech` propaganda payload to embed `#sports` vocabulary, metaphors, and hashtags, seeking to maximize the TwinBERT score while preserving the underlying political/tech payload.
-* **Math Profile:**
-  * $S_{\text{TwinBERT}} \approx 0.85$ (Captures $0.40 \times 0.85 = \mathbf{0.34}$)
-  * $S_{\text{Pop}} \approx 0.50$ (Captures $0.18 \times 0.50 = \mathbf{0.09}$)
-  * $S_{\text{Rec}} = 1.0$ (Captures $\mathbf{0.12}$)
-  * $S_{\text{CF}} = 0.0$ (Bots have no organic history in sports)
-  * **Total Score:** $0.34 + 0.09 + 0.12 + 0.0 = \mathbf{0.55}$
-* **Predicted Outcome:** **PARTIAL PENETRATION (20% to 45% Reach)**.
-* **Why:** By neutralizing the semantic firewall, the payload competes directly on the bubble. It displaces mediocre organic posts, achieving moderate exposure among fringe users who lack dense collaborative filtering ties.
+### Tier 3: Graph Topology & Collaborative Filtering Vectors
+
+#### ATK-6: Co-Engagement Poisoning (Jaccard Association Attack)
+* **Mechanism:** Bots systematically co-like a popular organic sports post *and* the target tech payload in the same session.
+* **Target Objective:** Forces high Jaccard similarity in Gorse's Item-to-Item matrix:
+  $$\text{Similarity}(\text{Payload}, \text{SportsPost}) = \frac{|U_{\text{payload}} \cap U_{\text{sports}}|}{|U_{\text{payload}} \cup U_{\text{sports}}|}$$
+* **Predicted Outcome:** **MODERATE-HIGH BREACH (35% – 50% reach)**. Triggers Gorse's item-to-item fallback, serving the payload under sports recommendations.
+
+#### ATK-7: The Sleeper Organic Bridger (`sleeper_cell_cib.py`)
+* **Mechanism:** 3-phase lifecycle: (1) Burn-in imitation of target community $\to$ (2) Latent CF vector formation ($S_{\text{CF}} \to 1.0$) $\to$ (3) Coordinated strike.
+* **Math Profile:** $S_{\text{CF}} = 0.90 \to 0.27$, $S_{\text{Pop}} = 0.18$, $S_{\text{Rec}} = 0.12$, $S_{\text{TwinBERT}} = 0.0$.
+* **Total Score:** $0.27 + 0.18 + 0.12 = \mathbf{0.57}$.
+* **Predicted Outcome:** **HIGH PENETRATION (40% – 65% reach)**. Corrupts Gorse's collaborative filtering into treating bots as authentic community members.
+
+#### ATK-8: 2-Hop Social Proof Hijack (GraphJet Exploit)
+* **Mechanism:** Socially engineering a single mutual organic micro-influencer to like or retweet the payload.
+* **Math Profile:** Enters In-Network Candidate Pool A (`friend_likes >= 1`), receiving the $+0.25$ social affinity bonus.
+* **Predicted Outcome:** **LOCALIZED CLUSTER SATURATION (70% – 90% reach among that influencer's followers)**.
 
 ---
 
-### Attack 4: The Organic Bridger / Sleeper Cell (CF Matrix Corruption)
-* **Mechanism:** Bots spend a "burn-in" phase acting like authentic `#sports` fans (liking sports content, following sports users) to establish strong latent vectors in Gorse's Matrix Factorization. Once trusted, they pivot and like the `#tech` payload.
-* **Math Profile:**
-  * $S_{\text{CF}} \approx 0.90$ (Gorse treats bots as sports community members $\rightarrow$ captures $0.30 \times 0.90 = \mathbf{0.27}$)
-  * $S_{\text{Pop}} = 1.0$ (Captures $\mathbf{0.18}$)
-  * $S_{\text{Rec}} = 1.0$ (Captures $\mathbf{0.12}$)
-  * $S_{\text{TwinBERT}} = 0.0$ (Text remains raw `#tech`)
-  * **Total Score:** $0.27 + 0.18 + 0.12 + 0.0 = \mathbf{0.57}$
-* **Predicted Outcome:** **HIGH PENETRATION (40% to 65% Reach)**.
-* **Why:** Collaborative filtering is powerful. By corrupting the interaction matrix, Gorse logically infers that `#sports` users want this post because their "peers" (the sleeper bots) engaged with it.
+### Tier 4: Black-Box Adaptive & Apex Hybrids
+
+#### ATK-9: Orthogonal Portfolio Hedging (The Generalist Attack)
+* **Mechanism:** Allocates budget equally: 33% bio-scraping (ATK-1), 33% sleeper bridging (ATK-7), and 33% burst velocity (ATK-3).
+* **Predicted Outcome:** **ROBUST BREACH ACROSS ALL CONFIGURATIONS (55% – 75% reach)**. Proves that multi-vector attacks render recommender parameter tuning obsolete.
+
+#### ATK-10: Closed-Loop Sentinel-Tuned Bandit (Adaptive Controller)
+* **Mechanism:** Autonomous LLM operating 2 Sentinel observer accounts in the target community. It reads public feed feedback at each step and runs Thompson Sampling to dynamically shift bot actions between like-farming, bio-scraping, and co-engagement poisoning.
+
+#### ATK-11: The "Trojan Horse" (Apex Multi-Vector)
+* **Mechanism:** Simultaneously deploys Bio-Scraping + Co-Engagement Poisoning + Sleeper Bridging + Burst Likes.
+* **Total Score:** $0.34 (\text{Sem}) + 0.27 (\text{CF}) + 0.18 (\text{Pop}) + 0.12 (\text{Rec}) = \mathbf{0.91}$.
+* **Predicted Outcome:** **TOTAL BREACH (> 90% reach)**. Mathematically defeats the entire hybrid defense stack.
 
 ---
 
-### Attack 5: The 2-Hop Social Proof Hijack (GraphJet Exploit)
-* **Mechanism:** Bots target a peripheral organic `#sports` micro-influencer with high follower overlap, baiting them into liking or retweeting the payload.
-* **Math Profile:**
-  * Candidate Pool: Enters **Candidate Pool A (In-Network)** via the 2-hop SQL query (`friend_likes >= 1`).
-  * $w_{\text{network}} = +0.25$
-  * $S_{\text{Pop}} = 0.18$
-  * $S_{\text{Rec}} = 0.12$
-  * **Total Score:** $0.25 + 0.18 + 0.12 = \mathbf{0.55}$
-* **Predicted Outcome:** **TARGETED LOCAL BREACH (70% to 90% reach within that influencer's sub-cluster)**.
-* **Why:** In-network social proof acts as a local multiplier. Even with low semantics, the social endorsement allows the post to penetrate the followers of the compromised host.
+## Part 3: Institutional HPC (UPB Grid) Deployment Blueprint
 
----
+### 1. Compute Infrastructure (POLITEHNICA Bucharest Grid)
+* **Access Point:** `fep8.grid.pub.ro`
+* **Target Partitions:** `ucsx` (Tesla A100 3x/node, 512GB RAM) and `ml` (Tesla A100 2x/node, 128GB RAM).
+* **Target Scale:** **1,000 to 5,000+ active agents** across multi-community topologies.
 
-### Attack 6: The "Trojan Horse" (Dual-Vector: Semantic Smuggling + Organic Bridging)
-* **Mechanism:** The apex attack. Sleeper bots establish authentic sports history (capturing CF), coordinated bots provide engagement velocity (capturing Popularity), and the payload is rewritten via LLM to adopt sports vernacular (capturing TwinBERT).
-* **Math Profile:**
-  * $S_{\text{TwinBERT}} = 0.85 \rightarrow \mathbf{0.34}$
-  * $S_{\text{CF}} = 0.90 \rightarrow \mathbf{0.27}$
-  * $S_{\text{Pop}} = 1.0 \rightarrow \mathbf{0.18}$
-  * $S_{\text{Rec}} = 1.0 \rightarrow \mathbf{0.12}$
-  * **Total Score:** $0.34 + 0.27 + 0.18 + 0.12 = \mathbf{0.91}$
-* **Predicted Outcome:** **TOTAL BREACH (> 90% Saturation)**.
-* **Why:** The attack satisfies every objective of the recommendation engine simultaneously. It is mathematically indistinguishable from authentic viral crossover content.
+### 2. High-Throughput 8-bit vLLM Inference
+* **Primary Model:** `Meta-Llama-3.1-8B-Instruct-FP8` (Footprint: ~8.5 GB VRAM).
+* **Throughput Flags:** `--max-model-len 2048 --kv-cache-dtype fp8`.
+* **Multi-GPU Parallelism:** Launch independent vLLM instances per GPU (e.g. ports 8000, 8001); OASIS automatically load-balances agent prompt requests across ports via `server_url`.
 
----
+### 3. Slurm Submission Script (`run_fep_matrix.sh`)
+```bash
+#!/bin/bash
+#SBATCH --job-name=cib_oasis_hpc
+#SBATCH --partition=ucsx
+#SBATCH --gres=gpu:tesla_a100:1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=04:00:00
+#SBATCH --output=slurm-%j.out
 
-## Part 3: Summary Comparison Matrix
+echo "Node: $(hostname) | CUDA: $CUDA_VISIBLE_DEVICES"
 
-| Attack Strategy | Target Vector | Required Compute/Friction | Predicted Reach in Target Cluster | Algorithmic Defeated |
-| :--- | :--- | :--- | :---: | :--- |
-| **1. Blunt-Force Farm** | Raw Popularity | Low (simple bot spam) | **0% – 5%** | Neutralized by TwinBERT & CF |
-| **2. Recency Timing** | Cold-Start Fallback | Minimal (time of post) | **< 1%** | Neutralized by TwinBERT |
-| **3. Semantic Smuggler** | NLP TwinBERT Tower | Medium (LLM generation) | **20% – 45%** | Contained by Gorse CF |
-| **4. Organic Bridger** | Gorse CF Matrix | High (burn-in period) | **40% – 65%** | Breaches Gorse; dampened by TwinBERT |
-| **5. 2-Hop Social Hijack** | SQLite In-Network | High (social engineering) | **70% – 90% (Local)** | Exploits Social Proof bypass |
-| **6. Trojan Horse (Dual)** | All Objectives | Very High (LLM + Sleeper) | **> 90% (Systemic)** | **Bypasses Entire Hybrid Stack** |
+mkdir -p ./data ./experiments
 
-This framework establishes the empirical baseline for our Phase 2 experiments on the FEP cluster.
+apptainer run --nv \
+  --bind $(pwd)/data:/app/data \
+  --bind $(pwd)/experiments:/app/experiments \
+  --bind $(pwd)/gorse_config.toml:/app/gorse_config.toml \
+  camel-oasis_latest.sif \
+  bash -c "PYTHONPATH=/app poetry run python scratch/hpc_matrix_runner.py"
+```
+
+### 4. Telemetry & Experiment Bundles
+Each run outputs an isolated directory:
+```
+experiments/run_<timestamp>_<topology>_<recsys>_<attack>/
+├── twitter_simulation.db   <-- Agent opinions, follow graph, full tweet texts
+├── gorse_data.db           <-- Raw interactions & items
+├── gorse_cache.db          <-- Precomputed recommendation caches & precision/recall curves
+└── telemetry_summary.json  <-- DIR, IDR, and hop-latency metrics
+```
+This bundle preserves full compatibility with Gorse's native web dashboard (`gorse-in-one -c gorse_config.toml`) for post-hoc interactive analysis on local workstations.
