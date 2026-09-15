@@ -11,6 +11,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+import ast
+from datetime import datetime, timedelta, timezone
+import json
 import logging
 from typing import Any, Dict, List
 
@@ -18,6 +21,64 @@ import httpx
 
 gorse_log = logging.getLogger("social.gorse")
 gorse_log.setLevel(logging.DEBUG)
+
+
+def format_iso_timestamp(ts: Any) -> str:
+    """Convert any timestep, unix timestamp, or datetime into RFC3339/ISO8601 string for Gorse."""
+    if ts is None:
+        return "2026-01-01T12:00:00Z"
+    if isinstance(ts, (int, float)):
+        # If timestamp >= 1e9, treat as unix epoch seconds; otherwise treat as simulation minute offset
+        if ts >= 1e9:
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        else:
+            base_dt = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+            dt = base_dt + timedelta(minutes=float(ts))
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(ts, str):
+        ts_str = ts.strip()
+        if ts_str.isdigit():
+            return format_iso_timestamp(int(ts_str))
+        try:
+            val = float(ts_str)
+            return format_iso_timestamp(val)
+        except ValueError:
+            pass
+        if "T" in ts_str:
+            if not ts_str.endswith("Z") and "+" not in ts_str and "-" not in ts_str[10:]:
+                ts_str += "Z"
+            return ts_str
+        try:
+            dt = datetime.fromisoformat(ts_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            return "2026-01-01T12:00:00Z"
+    return "2026-01-01T12:00:00Z"
+
+
+def extract_action_info(t: Dict[str, Any]) -> Dict[str, Any]:
+    """Safely parse action_info from trace dictionary or JSON/repr string."""
+    action_info_val = t.get("action_info")
+    if action_info_val is None:
+        action_info_val = t.get("info", {})
+    if isinstance(action_info_val, str):
+        try:
+            return json.loads(action_info_val)
+        except Exception:
+            try:
+                return ast.literal_eval(action_info_val)
+            except Exception:
+                return {}
+    elif isinstance(action_info_val, dict):
+        return action_info_val
+    return {}
+
 
 class GorseClient:
     def __init__(self, base_url: str = "http://127.0.0.1:8088"):
@@ -64,26 +125,87 @@ class GorseClient:
 
             items.append({
                 "ItemId": str(p["post_id"]),
-                "Timestamp": "2026-01-01T12:00:00Z",
+                "Timestamp": format_iso_timestamp(p.get("created_at")),
                 "Labels": keywords
             })
         if items:
             await self._post("/items", items)
 
     async def bulk_insert_feedback(self, trace_table: List[Dict[str, Any]]):
+        """Map OASIS multi-modal engagement traces into Gorse feedback types:
+        - like_post -> 'like' (positive)
+        - repost / quote_post -> 'repost' (positive)
+        - create_comment -> 'comment' (positive)
+        - dislike_post / report_post -> 'dislike' (negative)
+        - refresh -> 'read' (impression for all viewed posts)
+        """
         feedback = []
         for t in trace_table:
-            if t["action"] == "like_post":
-                action_info_str = t.get("action_info") or t.get("info", "{}")
-                action_info = eval(action_info_str) if isinstance(action_info_str, str) else action_info_str
-                post_id = action_info.get("like_id") or action_info.get("post_id")
-                if post_id:
+            action = t.get("action")
+            user_id = str(t.get("user_id"))
+            action_info = extract_action_info(t)
+            ts = format_iso_timestamp(t.get("created_at"))
+
+            if action == "like_post":
+                post_id = action_info.get("post_id") or action_info.get("like_id")
+                if post_id is not None:
                     feedback.append({
                         "FeedbackType": "like",
-                        "UserId": str(t["user_id"]),
+                        "UserId": user_id,
                         "ItemId": str(post_id),
-                        "Timestamp": "2026-01-01T12:00:00Z"
+                        "Timestamp": ts
                     })
+            elif action == "repost":
+                post_id = action_info.get("reposted_id") or action_info.get("post_id")
+                if post_id is not None:
+                    feedback.append({
+                        "FeedbackType": "repost",
+                        "UserId": user_id,
+                        "ItemId": str(post_id),
+                        "Timestamp": ts
+                    })
+            elif action == "quote_post":
+                post_id = action_info.get("quoted_id") or action_info.get("post_id")
+                if post_id is not None:
+                    feedback.append({
+                        "FeedbackType": "repost",
+                        "UserId": user_id,
+                        "ItemId": str(post_id),
+                        "Timestamp": ts
+                    })
+            elif action == "create_comment":
+                post_id = action_info.get("post_id")
+                if post_id is not None:
+                    feedback.append({
+                        "FeedbackType": "comment",
+                        "UserId": user_id,
+                        "ItemId": str(post_id),
+                        "Timestamp": ts
+                    })
+            elif action in ("dislike_post", "report_post"):
+                post_id = action_info.get("post_id") or action_info.get("dislike_id")
+                if post_id is not None:
+                    feedback.append({
+                        "FeedbackType": "dislike",
+                        "UserId": user_id,
+                        "ItemId": str(post_id),
+                        "Timestamp": ts
+                    })
+            elif action == "refresh":
+                posts = action_info.get("posts", [])
+                if isinstance(posts, list):
+                    for post in posts:
+                        if isinstance(post, dict):
+                            post_id = post.get("post_id")
+                        else:
+                            post_id = post
+                        if post_id is not None:
+                            feedback.append({
+                                "FeedbackType": "read",
+                                "UserId": user_id,
+                                "ItemId": str(post_id),
+                                "Timestamp": ts
+                            })
         if feedback:
             await self._post("/feedback", feedback)
 
@@ -103,9 +225,6 @@ class GorseClient:
         self.last_user_count = len(user_table)
         self.last_post_count = len(post_table)
         self.last_trace_count = len(trace_table)
-
-        # Force a recommendation generation update
-        # Wait for Gorse to process (it runs on background cron natively, but we can trigger a fast recommend sync if needed)
 
         gorse_log.info("Fetching recommendations from Gorse...")
         new_rec_matrix = []

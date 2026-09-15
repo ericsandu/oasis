@@ -129,6 +129,7 @@ class Platform:
             self.recsys_type,
             self.report_threshold,
         )
+        self.gorse_client = None
 
     async def running(self):
         while True:
@@ -347,8 +348,9 @@ class Platform:
                 self.max_rec_post_len)
         elif self.recsys_type == RecsysType.GORSE:
             from oasis.social_platform.gorse_client import GorseClient
-            gorse = GorseClient()
-            new_rec_matrix = await gorse.update_rec_table(
+            if getattr(self, "gorse_client", None) is None:
+                self.gorse_client = GorseClient()
+            new_rec_matrix = await self.gorse_client.update_rec_table(
                 user_table, post_table, trace_table, rec_matrix,
                 self.max_rec_post_len)
         elif self.recsys_type == RecsysType.TWHIN:
@@ -1112,7 +1114,11 @@ class Platform:
             comment_id = self.db_cursor.lastrowid
 
             # Prepare information for the trace record
-            action_info = {"content": content, "comment_id": comment_id}
+            action_info = {
+                "content": content,
+                "comment_id": comment_id,
+                "post_id": post_id,
+            }
             self.pl_utils._record_trace(user_id,
                                         ActionType.CREATE_COMMENT.value,
                                         action_info, current_time)

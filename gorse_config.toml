@@ -8,6 +8,11 @@ default_n = 100
 [recommend]
 fallback_recommend = ["item_to_item", "popular", "latest"]
 
+[recommend.data_source]
+positive_feedback_types = ["like", "repost", "comment"]
+read_feedback_types = ["read"]
+negative_feedback_types = ["dislike"]
+
 [recommend.collaborative]
 enable_index = true
 
@@ -16,7 +21,7 @@ enable_index = true
 
 [recommend.offline]
 check_recommend_period = 1
-explore_recommend = { popular = 0.3, latest = 0.3, collaborative = 0.4 }
+explore_recommend = { popular = 0.3, latest = 0.2, collaborative = 0.5 }
 
 [recommend.popular]
 popular_window = "720h"
