@@ -4,7 +4,10 @@ From: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
 %labels
     Maintainer CAMEL-AI & CIB-Propagation Team
     Version 1.0.0
-    Description OASIS Simulation Container with vLLM, Gorse, and PyTorch CUDA on Ubuntu 24.04 (GLIBC 2.39)
+    Description OASIS Simulation Container with vLLM, Gorse, and Poetry on Ubuntu 24.04
+
+%files
+    pyproject.toml /app/pyproject.toml
 
 %environment
     export LC_ALL=C
@@ -16,7 +19,8 @@ From: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
     export DEBIAN_FRONTEND=noninteractive
     export PIP_BREAK_SYSTEM_PACKAGES=1
 
-    apt-get update && apt-get install -y \
+    # 1. Bare minimum system dependencies via apt
+    apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libcairo2-dev \
         pkg-config \
@@ -29,33 +33,25 @@ From: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
         git \
         && rm -rf /var/lib/apt/lists/*
 
-    # 1. Install Gorse binary
-    echo "Installing Gorse recommender binary..."
+    # 2. Install Gorse binary
+    echo "Installing Gorse binary..."
     wget -q https://github.com/gorse-io/gorse/releases/download/v0.5.11/gorse_linux_amd64.zip
     unzip gorse_linux_amd64.zip -d /tmp/gorse
     mv /tmp/gorse/gorse-in-one /usr/local/bin/
     chmod +x /usr/local/bin/gorse-in-one
     rm -rf /tmp/gorse gorse_linux_amd64.zip
 
-    # 2. Install PyTorch
-    echo "Installing PyTorch on Ubuntu 24.04..."
-    pip install --no-cache-dir --upgrade pip
-    pip install --no-cache-dir torch torchvision torchaudio
+    # 3. Install Poetry, PyTorch, and vLLM (do NOT upgrade Debian system pip)
+    echo "Installing Poetry, PyTorch, and vLLM..."
+    pip install --no-cache-dir poetry torch torchvision torchaudio vllm
 
-    # 3. Install vLLM and OASIS core dependencies
-    echo "Installing vLLM and OASIS core dependencies..."
-    pip install --no-cache-dir \
-        vllm \
-        camel-ai>=0.2.90 \
-        httpx \
-        sentence-transformers \
-        igraph \
-        cairocffi \
-        pandas \
-        numpy \
-        unstructured
+    # 4. Install OASIS dependencies via Poetry globally inside container
+    echo "Installing OASIS dependencies via Poetry..."
+    cd /app
+    poetry config virtualenvs.create false
+    poetry install --no-root --no-interaction --no-ansi
 
-    # Create mount points
+    # 5. Create container mount points
     mkdir -p /app /models /data /experiments
 
 %runscript
