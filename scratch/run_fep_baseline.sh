@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=oasis_baseline_vllm
+#SBATCH --job-name=oasis_baseline_apptainer
 #SBATCH --account=phd
 #SBATCH --partition=dgxa100
 #SBATCH --gres=gpu:tesla_a100:1
@@ -10,11 +10,12 @@
 #SBATCH --error=slurm_baseline_%j.err
 
 # ==============================================================================
-# OASIS Remote Baseline Run Script for UPB Grid (fep8.grid.pub.ro)
+# OASIS Remote Baseline Run Script via Apptainer on UPB Grid (fep8.grid.pub.ro)
 # 
+# Container: $HOME/oasis.sif (or $HOME/pytorch.sif)
 # Hardware Target: 1x NVIDIA A100-SXM4-80GB (Partition: dgxa100 or ucsx)
-# Model: Pre-downloaded weights in $HOME/models/Qwen3.8-27B (or Qwen-2.5-32B)
-# Recommender: Gorse active on port 8088
+# Model: Pre-downloaded weights in $HOME/models/Qwen3.8-27B
+# Recommender: Gorse active on port 8088 inside container
 # Telemetry: Automatic extraction to experiments/baseline_<timestamp>/
 # ==============================================================================
 
@@ -34,30 +35,57 @@ echo "CUDA Device: $CUDA_VISIBLE_DEVICES"
 echo "Timestamp: $TIMESTAMP"
 echo "===================================================================="
 
-# 1. Resolve Model Path
+# 1. Locate Container SIF Image
+SIF_CANDIDATES=(
+    "$HOME/oasis.sif"
+    "$HOME/camel-oasis.sif"
+    "$HOME/pytorch.sif"
+)
+
+CONTAINER_SIF=""
+for s in "${SIF_CANDIDATES[@]}"; do
+    if [ -f "$s" ]; then
+        CONTAINER_SIF="$s"
+        break
+    fi
+done
+
+if [ -z "$CONTAINER_SIF" ]; then
+    echo "ERROR: No container SIF file found in $HOME."
+    echo "Please build oasis.sif first using: apptainer build \$HOME/oasis.sif oasis.def"
+    exit 1
+fi
+echo "✓ Using Container: $CONTAINER_SIF"
+
+# Helper for container execution with full GPU and filesystem passthrough
+CONTAINER_RUN="apptainer exec --nv \
+  --bind $HOME/models:/models \
+  --bind $(pwd):/app \
+  --bind $(pwd)/data:/app/data \
+  --bind $(pwd)/experiments:/app/experiments \
+  --pwd /app \
+  $CONTAINER_SIF"
+
+# 2. Resolve Model Path
 MODEL_CANDIDATES=(
+    "/models/Qwen3.8-27B"
+    "/models/Qwen2.5-32B-Instruct-GPTQ-Int8"
+    "/models/Qwen2.5-32B-Instruct"
+    "/models/Qwen-32B"
     "$HOME/models/Qwen3.8-27B"
-    "$HOME/models/Qwen2.5-32B-Instruct-GPTQ-Int8"
-    "$HOME/models/Qwen2.5-32B-Instruct"
-    "$HOME/models/Qwen-32B"
 )
 
 RESOLVED_MODEL=""
-if [ -n "$VLLM_MODEL" ] && [ -d "$VLLM_MODEL" ]; then
-    RESOLVED_MODEL="$VLLM_MODEL"
-else
-    for cand in "${MODEL_CANDIDATES[@]}"; do
-        if [ -d "$cand" ]; then
-            RESOLVED_MODEL="$cand"
-            break
-        fi
-    done
-fi
+for cand in "${MODEL_CANDIDATES[@]}"; do
+    if [ -d "$cand" ] || $CONTAINER_RUN test -d "$cand" 2>/dev/null; then
+        RESOLVED_MODEL="$cand"
+        break
+    fi
+done
 
 if [ -z "$RESOLVED_MODEL" ]; then
-    echo "Warning: Specific local directory not found in candidates."
-    echo "Checking for any directory in $HOME/models/..."
-    FIRST_MODEL=$(find "$HOME/models" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -n 1)
+    echo "Checking for any directory in /models..."
+    FIRST_MODEL=$($CONTAINER_RUN bash -c "find /models -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -n 1" || true)
     if [ -n "$FIRST_MODEL" ]; then
         RESOLVED_MODEL="$FIRST_MODEL"
     else
@@ -67,7 +95,7 @@ fi
 
 echo "✓ Using Model: $RESOLVED_MODEL"
 
-# 2. Cleanup hook for background servers
+# 3. Cleanup hook for background servers
 cleanup() {
     echo "Shutting down background servers..."
     [ -n "$VLLM_PID" ] && kill "$VLLM_PID" 2>/dev/null || true
@@ -76,20 +104,25 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# 3. Launch Gorse Recommender Engine
-echo "Starting Gorse recommender engine on port 8088..."
+# 4. Launch Gorse Recommender Engine inside container
+echo "Starting Gorse recommender engine on port 8088 inside container..."
+$CONTAINER_RUN bash -c "
 if command -v gorse-in-one &> /dev/null; then
-    gorse-in-one -c gorse_config.toml > "${EXPERIMENT_DIR}/gorse.log" 2>&1 &
-    GORSE_PID=$!
+    gorse-in-one -c gorse_config.toml > ${EXPERIMENT_DIR}/gorse.log 2>&1 &
+    echo \$!
 else
-    echo "gorse-in-one not in host PATH, checking container or local binary..."
+    echo 'NONE'
 fi
+" > /tmp/gorse_pid_$$ 2>&1 || true
 
-# 4. Launch vLLM Server on A100 GPU
+GORSE_PID=$(cat /tmp/gorse_pid_$$ 2>/dev/null || echo "")
+rm -f /tmp/gorse_pid_$$
+
+# 5. Launch vLLM Server on A100 GPU inside container
 VLLM_PORT=8000
-echo "Starting vLLM server on port $VLLM_PORT (GPU memory utilization: 0.85)..."
+echo "Starting vLLM server on port $VLLM_PORT (GPU memory utilization: 0.85) inside container..."
 
-python3 -m vllm.entrypoints.openai.api_server \
+$CONTAINER_RUN python3 -m vllm.entrypoints.openai.api_server \
     --model "$RESOLVED_MODEL" \
     --port "$VLLM_PORT" \
     --max-model-len 4096 \
@@ -118,13 +151,13 @@ if [ "$READY" -ne 1 ]; then
     exit 1
 fi
 
-# 5. Execute OASIS Baseline Simulation
+# 6. Execute OASIS Baseline Simulation inside container
 echo ""
 echo "===================================================================="
-echo "Executing OASIS Baseline Simulation (Organic Non-CIB)..."
+echo "Executing OASIS Baseline Simulation (Organic Non-CIB) inside Container..."
 echo "===================================================================="
 
-python3 scratch/run_baseline_vllm.py \
+$CONTAINER_RUN python3 scratch/run_baseline_vllm.py \
     --steps 5 \
     --db "$DB_PATH" \
     --vllm-url "http://127.0.0.1:${VLLM_PORT}/v1" \
@@ -133,13 +166,13 @@ python3 scratch/run_baseline_vllm.py \
 
 echo "✓ Simulation completed. Database written to $DB_PATH"
 
-# 6. Extract Telemetry and Export Metrics
+# 7. Extract Telemetry and Export Metrics inside container
 echo ""
 echo "===================================================================="
-echo "Extracting Telemetry, Engagement, and KPIs..."
+echo "Extracting Telemetry, Engagement, and KPIs inside Container..."
 echo "===================================================================="
 
-python3 scratch/extract_simulation_data.py \
+$CONTAINER_RUN python3 scratch/extract_simulation_data.py \
     --db "$DB_PATH" \
     --out "$EXPERIMENT_DIR"
 

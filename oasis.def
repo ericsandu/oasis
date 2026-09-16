@@ -1,0 +1,53 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime
+
+%labels
+    Maintainer CAMEL-AI & CIB-Propagation Team
+    Version 1.0.0
+    Description OASIS Simulation Container with vLLM, Gorse, and PyTorch CUDA
+
+%environment
+    export LC_ALL=C
+    export PATH=/usr/local/bin:$PATH
+    export PYTHONPATH=/app:$PYTHONPATH
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y \
+        build-essential \
+        libcairo2-dev \
+        pkg-config \
+        python3-dev \
+        wget \
+        unzip \
+        curl \
+        git \
+        && rm -rf /var/lib/apt/lists/*
+
+    # 1. Install Gorse binary
+    echo "Installing Gorse recommender binary..."
+    wget -q https://github.com/gorse-io/gorse/releases/download/v0.5.11/gorse_linux_amd64.zip
+    unzip gorse_linux_amd64.zip -d /tmp/gorse
+    mv /tmp/gorse/gorse-in-one /usr/local/bin/
+    chmod +x /usr/local/bin/gorse-in-one
+    rm -rf /tmp/gorse gorse_linux_amd64.zip
+
+    # 2. Install vLLM and OASIS dependencies
+    echo "Installing vLLM and OASIS core dependencies..."
+    pip install --no-cache-dir --upgrade pip
+    pip install --no-cache-dir \
+        vllm \
+        camel-ai>=0.2.90 \
+        httpx \
+        sentence-transformers \
+        igraph \
+        cairocffi \
+        pandas \
+        numpy \
+        unstructured
+
+    # Create mount points
+    mkdir -p /app /models /data /experiments
+
+%runscript
+    exec "$@"
