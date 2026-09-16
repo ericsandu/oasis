@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies required for igraph and cairocffi
+# Install system dependencies required for igraph, cairocffi, and vLLM
 RUN apt-get update && apt-get install -y \
     build-essential \
     libcairo2-dev \
@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     wget \
     unzip \
+    curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Gorse
@@ -33,6 +35,8 @@ RUN rm -f poetry.lock
 # Lock and install dependencies natively inside the 3.11 container
 RUN poetry lock && poetry install --no-interaction --no-ansi
 
+# Install vLLM for high-throughput model serving
+RUN pip install --no-cache-dir vllm
 
 RUN chmod +x /app/entrypoint.sh
 
