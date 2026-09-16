@@ -3,5 +3,9 @@
 venv
 __pycache__
 *.pyc
-data/
-.github
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.sif
+experiments/

@@ -6,18 +6,24 @@ data_store = "sqlite:///app/data/gorse_data.db"
 default_n = 100
 
 [recommend]
-fallback_recommend = ["item_to_item", "popular", "latest"]
+fallback_recommend = ["item-to-item/users", "non-personalized/popular", "latest"]
 
 [recommend.data_source]
 positive_feedback_types = ["like", "repost", "comment"]
 read_feedback_types = ["read"]
 negative_feedback_types = ["dislike"]
 
-[recommend.collaborative]
-enable_index = true
+[[recommend.non-personalized]]
+name = "popular"
+score = "len(feedback)"
 
-[recommend.item_to_item]
-enable_index = true
+[[recommend.item-to-item]]
+name = "users"
+type = "users"
+
+[recommend.collaborative]
+type = "mf"
+fit_period = "1m"
 
 [recommend.offline]
 check_recommend_period = 1
