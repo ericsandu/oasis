@@ -129,10 +129,12 @@ done
 
 # 5. Launch vLLM Server on A100 GPU inside container
 VLLM_PORT=8000
-echo "Starting vLLM server on port $VLLM_PORT (GPU memory utilization: 0.85) inside container..."
+MODEL_BASENAME=$(basename "$RESOLVED_MODEL")
+echo "Starting vLLM server on port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME)..."
 
 $CONTAINER_RUN python3 -m vllm.entrypoints.openai.api_server \
     --model "$RESOLVED_MODEL" \
+    --served-model-name "$RESOLVED_MODEL" "$MODEL_BASENAME" "Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8" "Qwen/Qwen2.5-32B-Instruct" \
     --port "$VLLM_PORT" \
     --max-model-len 4096 \
     --gpu-memory-utilization 0.85 \

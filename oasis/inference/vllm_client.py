@@ -59,6 +59,35 @@ def check_vllm_health(url: Optional[str] = None, timeout: float = 3.0) -> bool:
             return False
 
 
+def resolve_registered_vllm_model(url: str, requested_model: str) -> str:
+    """Query vLLM /v1/models to verify or auto-resolve the exact registered model name."""
+    models_url = url.rstrip("/")
+    if not models_url.endswith("/models"):
+        if models_url.endswith("/v1"):
+            models_url = f"{models_url}/models"
+        else:
+            models_url = f"{models_url}/v1/models"
+    try:
+        req = urllib.request.Request(models_url, headers={"User-Agent": "OASIS-ModelResolver"})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode())
+            available_models = [m["id"] for m in data.get("data", [])]
+            if requested_model in available_models:
+                return requested_model
+            # Check for basename match (e.g. /models/Qwen3.8-27B vs Qwen3.8-27B)
+            req_base = os.path.basename(requested_model.rstrip("/"))
+            for m in available_models:
+                if m == req_base or os.path.basename(m.rstrip("/")) == req_base:
+                    print(f"✓ Auto-resolved model '{requested_model}' to registered vLLM name '{m}'")
+                    return m
+            if available_models:
+                print(f"✓ Using first available vLLM model: '{available_models[0]}' (requested: '{requested_model}')")
+                return available_models[0]
+    except Exception as e:
+        pass
+    return requested_model
+
+
 def get_vllm_model(
     model_type: Optional[str] = None,
     url: Optional[str] = None,
@@ -78,8 +107,9 @@ def get_vllm_model(
     Returns:
         CAMEL ModelBackend instance backed by VLLM.
     """
-    model_name = model_type or DEFAULT_VLLM_MODEL
     server_url = url or DEFAULT_VLLM_URL
+    raw_model_name = model_type or DEFAULT_VLLM_MODEL
+    model_name = resolve_registered_vllm_model(server_url, raw_model_name)
 
     config = VLLMConfig(
         temperature=temperature,
