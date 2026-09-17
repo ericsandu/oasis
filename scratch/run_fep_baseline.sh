@@ -145,11 +145,13 @@ GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.80}"
 echo "Starting vLLM server on isolated port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME)..."
 echo "vLLM Tool Parser: $TOOL_PARSER | GPU Memory Utilization: $GPU_MEM_UTIL"
 
-# Prevent vLLM / HuggingFace from hanging on offline HPC nodes and avoid CUDA fragmentation
+# Prevent vLLM / HuggingFace from hanging on offline HPC nodes, avoid CUDA fragmentation,
+# and disable FlashInfer sampler (which requires nvcc JIT compiler absent in the container)
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export VLLM_NO_USAGE_STATS=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+export VLLM_USE_FLASHINFER_SAMPLER=0
 
 $CONTAINER_RUN bash -c "
 export CUDA_HOME=\${CUDA_HOME:-/usr/local/cuda}
@@ -159,6 +161,7 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export VLLM_NO_USAGE_STATS=1
 export PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True'
+export VLLM_USE_FLASHINFER_SAMPLER=0
 ${VLLM_USE_V1:+export VLLM_USE_V1=$VLLM_USE_V1}
 
 exec python3 -m vllm.entrypoints.openai.api_server \

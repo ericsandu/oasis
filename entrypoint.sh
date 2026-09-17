@@ -28,12 +28,14 @@ if [ "$START_VLLM" = "1" ]; then
     GPU_MEM="${VLLM_GPU_MEM:-0.85}"
     
     TOOL_PARSER="${VLLM_TOOL_PARSER:-hermes}"
+    export VLLM_USE_FLASHINFER_SAMPLER=0
     echo "vLLM Model: $MODEL_NAME | Port: $VLLM_PORT | GPU Mem: $GPU_MEM | MaxLen: $MAX_LEN | Tool Parser: $TOOL_PARSER"
     python3 -m vllm.entrypoints.openai.api_server \
         --model "$MODEL_NAME" \
         --port "$VLLM_PORT" \
         --max-model-len "$MAX_LEN" \
         --gpu-memory-utilization "$GPU_MEM" \
+        --enforce-eager \
         --enable-auto-tool-choice \
         --tool-call-parser "$TOOL_PARSER" \
         --trust-remote-code > /app/data/vllm.log 2>&1 &
