@@ -94,11 +94,6 @@ def get_vllm_model(
         model_config_dict=config.as_dict(),
     )
 
-    # If CAMEL does not recognize the custom path string and defaults to 999_999_999,
-    # explicitly assign the Qwen context window (256K = 262,144 tokens)
-    if hasattr(model, "token_limit") and (model.token_limit is None or model.token_limit >= 999_999_999):
-        model.token_limit = 262144
-
     return model
 
 
