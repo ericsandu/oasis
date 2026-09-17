@@ -168,7 +168,7 @@ VLLM_PID=$!
 
 echo "Waiting for vLLM server to become healthy on port $VLLM_PORT (PID: $VLLM_PID)..."
 READY=0
-for i in $(seq 1 180); do
+for i in $(seq 1 300); do
     sleep 2
     if ! kill -0 "$VLLM_PID" 2>/dev/null; then
         echo "ERROR: vLLM process (PID: $VLLM_PID) exited unexpectedly! Log output from ${EXPERIMENT_DIR}/vllm.log:"
@@ -182,7 +182,7 @@ for i in $(seq 1 180); do
     fi
     if [ $((i % 5)) -eq 0 ]; then
         LATEST_LOG=$(tail -n 1 "${EXPERIMENT_DIR}/vllm.log" 2>/dev/null || echo "initializing...")
-        echo "  [$(date +%T)] Waiting for vLLM (${i}/180) - Status: $LATEST_LOG"
+        echo "  [$(date +%T)] Waiting for vLLM (${i}/300) - Status: $LATEST_LOG"
     fi
 done
 
