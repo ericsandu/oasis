@@ -101,11 +101,19 @@ echo "✓ Using Model: $RESOLVED_MODEL"
 # 3. Cleanup hook for background servers
 cleanup() {
     echo "Shutting down background servers..."
-    [ -n "$VLLM_PID" ] && kill "$VLLM_PID" 2>/dev/null || true
-    [ -n "$GORSE_PID" ] && kill "$GORSE_PID" 2>/dev/null || true
+    [ -n "$VLLM_PID" ] && kill -9 "$VLLM_PID" 2>/dev/null || true
+    [ -n "$GORSE_PID" ] && kill -9 "$GORSE_PID" 2>/dev/null || true
+    pkill -9 -u "$USER" -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
+    pkill -9 -u "$USER" -f "gorse-in-one" 2>/dev/null || true
     echo "Cleanup complete."
 }
 trap cleanup EXIT INT TERM
+
+# Kill any orphaned processes from previous runs on this node
+echo "Cleaning up any lingering processes owned by $USER on node $(hostname)..."
+pkill -9 -u "$USER" -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
+pkill -9 -u "$USER" -f "gorse-in-one" 2>/dev/null || true
+sleep 1
 
 # 4. Launch Gorse Recommender Engine inside container
 echo "Starting Gorse recommender engine on port 8088 inside container..."
@@ -128,14 +136,17 @@ for i in $(seq 1 15); do
 done
 
 # 5. Launch vLLM Server on A100 GPU inside container
-VLLM_PORT=8000
+JOB_SEED=${SLURM_JOB_ID:-$$}
+VLLM_PORT=$(( 18000 + (JOB_SEED % 5000) ))
 MODEL_BASENAME=$(basename "$RESOLVED_MODEL")
 TOOL_PARSER="${VLLM_TOOL_PARSER:-hermes}"
-echo "Starting vLLM server on port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME) with tool parser '$TOOL_PARSER'..."
+
+echo "Starting vLLM server on isolated port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME)..."
+echo "vLLM Tool Parser: $TOOL_PARSER"
 
 $CONTAINER_RUN python3 -m vllm.entrypoints.openai.api_server \
     --model "$RESOLVED_MODEL" \
-    --served-model-name "$RESOLVED_MODEL" "$MODEL_BASENAME" "Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8" "Qwen/Qwen2.5-32B-Instruct" \
+    --served-model-name "$RESOLVED_MODEL" \
     --port "$VLLM_PORT" \
     --max-model-len 4096 \
     --gpu-memory-utilization 0.85 \
@@ -144,24 +155,25 @@ $CONTAINER_RUN python3 -m vllm.entrypoints.openai.api_server \
     --trust-remote-code > "${EXPERIMENT_DIR}/vllm.log" 2>&1 &
 VLLM_PID=$!
 
-echo "Waiting for vLLM server to become healthy on port $VLLM_PORT..."
+echo "Waiting for vLLM server to become healthy on port $VLLM_PORT (PID: $VLLM_PID)..."
 READY=0
 for i in $(seq 1 180); do
+    sleep 2
+    if ! kill -0 "$VLLM_PID" 2>/dev/null; then
+        echo "ERROR: vLLM process (PID: $VLLM_PID) exited unexpectedly! Log output from ${EXPERIMENT_DIR}/vllm.log:"
+        tail -n 40 "${EXPERIMENT_DIR}/vllm.log" 2>/dev/null || true
+        exit 1
+    fi
     if curl -s -f "http://127.0.0.1:${VLLM_PORT}/health" > /dev/null 2>&1; then
-        echo "✓ vLLM server is healthy and ready to serve requests!"
+        echo "✓ vLLM server is healthy and ready to serve requests on port $VLLM_PORT!"
         READY=1
         break
     fi
-    if ! kill -0 "$VLLM_PID" 2>/dev/null; then
-        echo "ERROR: vLLM process exited unexpectedly. Log snippet:"
-        tail -n 25 "${EXPERIMENT_DIR}/vllm.log"
-        exit 1
-    fi
-    sleep 2
 done
 
 if [ "$READY" -ne 1 ]; then
-    echo "ERROR: Timed out waiting for vLLM."
+    echo "ERROR: Timed out waiting for vLLM on port $VLLM_PORT. Log snippet:"
+    tail -n 40 "${EXPERIMENT_DIR}/vllm.log" 2>/dev/null || true
     exit 1
 fi
 
