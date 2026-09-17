@@ -124,6 +124,35 @@ def get_vllm_model(
         model_config_dict=config.as_dict(),
     )
 
+    # Sanitize messages sent to vLLM so only index 0 can be role='system'
+    def _sanitize_messages(msgs):
+        if not msgs:
+            return msgs
+        clean = []
+        for idx, m in enumerate(msgs):
+            if isinstance(m, dict) and m.get("role") == "system" and idx > 0:
+                cm = dict(m)
+                cm["role"] = "user"
+                clean.append(cm)
+            else:
+                clean.append(m)
+        return clean
+
+    orig_arun = model.arun
+
+    async def safe_arun(messages, *args, **kwargs):
+        return await orig_arun(_sanitize_messages(messages), *args, **kwargs)
+
+    model.arun = safe_arun
+
+    if hasattr(model, "run"):
+        orig_run = model.run
+
+        def safe_run(messages, *args, **kwargs):
+            return orig_run(_sanitize_messages(messages), *args, **kwargs)
+
+        model.run = safe_run
+
     return model
 
 

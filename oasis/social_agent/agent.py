@@ -203,7 +203,7 @@ class SocialAgent(ChatAgent):
 
         if self.interview_record:
             # Test memory should not be writed to memory.
-            self.update_memory(message=user_msg, role=OpenAIBackendRole.SYSTEM)
+            self.update_memory(message=user_msg, role=OpenAIBackendRole.USER)
 
         openai_messages, _ = self.memory.get_context()
 
@@ -283,11 +283,11 @@ class SocialAgent(ChatAgent):
                 func = function_list[i].func
                 result = await func(*args, **kwargs)
                 self.update_memory(message=BaseMessage.make_user_message(
-                    role_name=OpenAIBackendRole.SYSTEM,
+                    role_name=OpenAIBackendRole.USER,
                     content=f"Agent {self.social_agent_id} performed "
                     f"{func_name} with args: {args} and kwargs: {kwargs}"
                     f"and the result is {result}"),
-                                   role=OpenAIBackendRole.SYSTEM)
+                                   role=OpenAIBackendRole.USER)
                 agent_log.info(f"Agent {self.social_agent_id}: {result}")
                 return result
         raise ValueError(f"Function {func_name} not found in the list.")
