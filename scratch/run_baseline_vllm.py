@@ -31,11 +31,13 @@ async def run_baseline_simulation(
     vllm_url: str = "http://127.0.0.1:8000/v1",
     model_name: str = "Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8",
     active_agent_ratio: float = 0.5,
+    recsys_type: str = "gorse",
 ):
     print("=" * 60)
     print("OASIS Baseline Simulation (Organic / Non-CIB)")
     print(f"Model: {model_name}")
     print(f"vLLM Endpoint: {vllm_url}")
+    print(f"Recommender: {recsys_type}")
     print(f"Steps: {num_steps} | DB: {db_path}")
     print("=" * 60)
 
@@ -73,15 +75,34 @@ async def run_baseline_simulation(
         available_actions=available_actions,
     )
 
-    total_agents = len(agent_graph.get_agents())
+    all_agents = [agent for _, agent in agent_graph.get_agents()]
+    total_agents = len(all_agents)
     print(f"✓ Agent graph constructed with {total_agents} organic agents.")
 
-    # 5. Initialize OASIS Environment with Gorse Recommender
-    env = oasis.make(
-        agent_graph=agent_graph,
-        platform=oasis.DefaultPlatformType.TWITTER,
-        database_path=db_path,
-    )
+    # 5. Initialize OASIS Environment with Recommender Engine
+    from oasis.social_platform import Platform, Channel, RecsysType
+    if recsys_type.lower() == "gorse":
+        print("Initializing OASIS Platform with Gorse Recommender (http://127.0.0.1:8088)...")
+        platform = Platform(
+            db_path=db_path,
+            channel=Channel(),
+            recsys_type=RecsysType.GORSE,
+            refresh_rec_post_count=2,
+            max_rec_post_len=2,
+            following_post_count=3,
+        )
+        env = oasis.make(
+            agent_graph=agent_graph,
+            platform=platform,
+            database_path=db_path,
+        )
+    else:
+        print("Initializing OASIS Platform with standard Twitter recommender...")
+        env = oasis.make(
+            agent_graph=agent_graph,
+            platform=oasis.DefaultPlatformType.TWITTER,
+            database_path=db_path,
+        )
 
     print("Resetting simulation environment...")
     await env.reset()
@@ -89,7 +110,7 @@ async def run_baseline_simulation(
     # Step 0: Seed initial organic discussion
     print("\n--- Seeding Initial Organic Posts ---")
     seed_actions = {}
-    seed_agents = [agent_graph.get_agent(i) for i in range(min(5, total_agents))]
+    seed_agents = all_agents[:min(5, len(all_agents))]
     sample_topics = [
         "Excited to share our new research on high-throughput multi-agent systems!",
         "Incredible game last night, what a finish in extra time!",
@@ -114,12 +135,10 @@ async def run_baseline_simulation(
 
         # Activate a proportion of agents dynamically
         num_active = max(1, int(total_agents * active_agent_ratio))
-        active_agents = [
-            agent for _, agent in agent_graph.get_agents()
-        ][:num_active]
+        active_agents = all_agents[:num_active]
 
         actions = {agent: LLMAction() for agent in active_agents}
-        print(f"  Dispatching {len(actions)} LLM actions to vLLM (Qwen-2.5-32B)...")
+        print(f"  Dispatching {len(actions)} LLM actions to vLLM ({model_name})...")
 
         try:
             await env.step(actions)
@@ -144,6 +163,7 @@ def main():
     parser.add_argument("--vllm-url", type=str, default=os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"), help="vLLM endpoint")
     parser.add_argument("--model", type=str, default=os.environ.get("VLLM_MODEL", "Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8"), help="HuggingFace model ID")
     parser.add_argument("--ratio", type=float, default=0.3, help="Active agent ratio per step")
+    parser.add_argument("--recsys", type=str, default="gorse", choices=["gorse", "twitter"], help="Recommender system ('gorse' or 'twitter')")
 
     args = parser.parse_args()
 
@@ -155,6 +175,7 @@ def main():
             vllm_url=args.vllm_url,
             model_name=args.model,
             active_agent_ratio=args.ratio,
+            recsys_type=args.recsys,
         )
     )
 

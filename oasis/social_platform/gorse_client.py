@@ -227,16 +227,23 @@ class GorseClient:
         self.last_trace_count = len(trace_table)
 
         gorse_log.info("Fetching recommendations from Gorse...")
-        new_rec_matrix = []
-        # Query recommendations for all users
-        for u in user_table:
+        num_users = max(len(rec_matrix) if rec_matrix else 0, len(user_table))
+        new_rec_matrix = [[] for _ in range(num_users)]
+
+        # Map each user to their recommendation list
+        for idx, u in enumerate(user_table):
             uid = str(u["user_id"])
             recs = await self._get(f"/recommend/{uid}?n={max_rec_post_len}")
-            # Gorse returns a list of item IDs
-            if recs:
+            if recs and isinstance(recs, list):
+                rec_ids = []
                 for item_id in recs:
-                    new_rec_matrix.append({
-                        "user_id": int(uid),
-                        "post_id": int(item_id)
-                    })
+                    try:
+                        rec_ids.append(int(item_id))
+                    except (ValueError, TypeError):
+                        pass
+                new_rec_matrix[idx] = rec_ids
+            elif rec_matrix and idx < len(rec_matrix):
+                # Fallback to existing recommendations if Gorse hasn't produced recs yet
+                new_rec_matrix[idx] = rec_matrix[idx]
+
         return new_rec_matrix

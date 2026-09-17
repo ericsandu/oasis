@@ -111,15 +111,21 @@ trap cleanup EXIT INT TERM
 echo "Starting Gorse recommender engine on port 8088 inside container..."
 $CONTAINER_RUN bash -c "
 if command -v gorse-in-one &> /dev/null; then
-    gorse-in-one -c gorse_config.toml > ${EXPERIMENT_DIR}/gorse.log 2>&1 &
-    echo \$!
+    exec gorse-in-one -c gorse_config.toml
 else
-    echo 'NONE'
+    echo 'Notice: gorse-in-one not installed in container.'
 fi
-" > /tmp/gorse_pid_$$ 2>&1 || true
+" > "${EXPERIMENT_DIR}/gorse.log" 2>&1 &
+GORSE_PID=$!
 
-GORSE_PID=$(cat /tmp/gorse_pid_$$ 2>/dev/null || echo "")
-rm -f /tmp/gorse_pid_$$
+echo "Waiting for Gorse recommender to initialize..."
+for i in $(seq 1 15); do
+    if curl -s -f "http://127.0.0.1:8088/api/dashboard/stats" > /dev/null 2>&1; then
+        echo "✓ Gorse recommender engine is running on port 8088."
+        break
+    fi
+    sleep 1
+done
 
 # 5. Launch vLLM Server on A100 GPU inside container
 VLLM_PORT=8000
@@ -160,12 +166,17 @@ echo "===================================================================="
 echo "Executing OASIS Baseline Simulation (Organic Non-CIB) inside Container..."
 echo "===================================================================="
 
+SIM_STEPS="${SIM_STEPS:-5}"
+SIM_RATIO="${SIM_RATIO:-0.4}"
+SIM_RECSYS="${SIM_RECSYS:-gorse}"
+
 $CONTAINER_RUN python3 scratch/run_baseline_vllm.py \
-    --steps 5 \
+    --steps "$SIM_STEPS" \
     --db "$DB_PATH" \
     --vllm-url "http://127.0.0.1:${VLLM_PORT}/v1" \
     --model "$RESOLVED_MODEL" \
-    --ratio 0.4
+    --ratio "$SIM_RATIO" \
+    --recsys "$SIM_RECSYS"
 
 echo "✓ Simulation completed. Database written to $DB_PATH"
 
