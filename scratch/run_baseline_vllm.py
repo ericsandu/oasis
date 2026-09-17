@@ -9,6 +9,8 @@ import os
 import sys
 import time
 import argparse
+import random
+import sqlite3
 from typing import Optional
 
 # Ensure repository root is in sys.path
@@ -129,22 +131,45 @@ async def run_baseline_simulation(
     await env.step(seed_actions)
     print(f"Seeded {len(seed_actions)} initial organic posts.")
 
+    def _get_db_counts(db_file: str):
+        try:
+            conn = sqlite3.connect(db_file)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM trace")
+            traces = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM post")
+            posts = c.fetchone()[0]
+            conn.close()
+            return traces, posts
+        except Exception:
+            return 0, 0
+
     # Main Simulation Loop
     for step_num in range(1, num_steps + 1):
         step_start = time.time()
         print(f"\n>>> Executing Step {step_num} / {num_steps}...")
 
-        # Activate a proportion of agents dynamically
+        # Activate a proportion of agents dynamically (sampled per step for coverage)
         num_active = max(1, int(total_agents * active_agent_ratio))
-        active_agents = all_agents[:num_active]
+        random.seed(42 + step_num)
+        active_agents = random.sample(all_agents, num_active)
 
         actions = {agent: LLMAction() for agent in active_agents}
         print(f"  Dispatching {len(actions)} LLM actions to vLLM ({model_name})...")
 
+        pre_traces, pre_posts = _get_db_counts(db_path)
         try:
             await env.step(actions)
             elapsed = time.time() - step_start
-            print(f"  Step {step_num} completed in {elapsed:.2f}s ({elapsed / len(actions):.2f}s/agent).")
+            post_traces, post_posts = _get_db_counts(db_path)
+            new_actions = post_traces - pre_traces
+            new_posts = post_posts - pre_posts
+            print(
+                f"  Step {step_num} completed in {elapsed:.2f}s "
+                f"({elapsed / len(actions):.2f}s/agent) | "
+                f"+{new_actions} actions, +{new_posts} new posts "
+                f"(Total: {post_traces} traces, {post_posts} posts)."
+            )
         except Exception as e:
             print(f"  Step {step_num} encountered an error: {e}")
             raise e

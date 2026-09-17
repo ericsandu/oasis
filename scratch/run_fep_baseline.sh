@@ -130,7 +130,8 @@ done
 # 5. Launch vLLM Server on A100 GPU inside container
 VLLM_PORT=8000
 MODEL_BASENAME=$(basename "$RESOLVED_MODEL")
-echo "Starting vLLM server on port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME)..."
+TOOL_PARSER="${VLLM_TOOL_PARSER:-hermes}"
+echo "Starting vLLM server on port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME) with tool parser '$TOOL_PARSER'..."
 
 $CONTAINER_RUN python3 -m vllm.entrypoints.openai.api_server \
     --model "$RESOLVED_MODEL" \
@@ -138,6 +139,8 @@ $CONTAINER_RUN python3 -m vllm.entrypoints.openai.api_server \
     --port "$VLLM_PORT" \
     --max-model-len 4096 \
     --gpu-memory-utilization 0.85 \
+    --enable-auto-tool-choice \
+    --tool-call-parser "$TOOL_PARSER" \
     --trust-remote-code > "${EXPERIMENT_DIR}/vllm.log" 2>&1 &
 VLLM_PID=$!
 

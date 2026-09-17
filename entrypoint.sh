@@ -27,12 +27,15 @@ if [ "$START_VLLM" = "1" ]; then
     MAX_LEN="${VLLM_MAX_LEN:-4096}"
     GPU_MEM="${VLLM_GPU_MEM:-0.85}"
     
-    echo "vLLM Model: $MODEL_NAME | Port: $VLLM_PORT | GPU Mem: $GPU_MEM | MaxLen: $MAX_LEN"
+    TOOL_PARSER="${VLLM_TOOL_PARSER:-hermes}"
+    echo "vLLM Model: $MODEL_NAME | Port: $VLLM_PORT | GPU Mem: $GPU_MEM | MaxLen: $MAX_LEN | Tool Parser: $TOOL_PARSER"
     python3 -m vllm.entrypoints.openai.api_server \
         --model "$MODEL_NAME" \
         --port "$VLLM_PORT" \
         --max-model-len "$MAX_LEN" \
         --gpu-memory-utilization "$GPU_MEM" \
+        --enable-auto-tool-choice \
+        --tool-call-parser "$TOOL_PARSER" \
         --trust-remote-code > /app/data/vllm.log 2>&1 &
     VLLM_PID=$!
     echo "vLLM PID: $VLLM_PID"
