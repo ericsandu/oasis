@@ -144,15 +144,26 @@ TOOL_PARSER="${VLLM_TOOL_PARSER:-hermes}"
 echo "Starting vLLM server on isolated port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME)..."
 echo "vLLM Tool Parser: $TOOL_PARSER"
 
-$CONTAINER_RUN python3 -m vllm.entrypoints.openai.api_server \
-    --model "$RESOLVED_MODEL" \
-    --served-model-name "$RESOLVED_MODEL" \
-    --port "$VLLM_PORT" \
+# Prevent vLLM / HuggingFace from hanging on offline HPC nodes
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export VLLM_NO_USAGE_STATS=1
+
+$CONTAINER_RUN bash -c "
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export VLLM_NO_USAGE_STATS=1
+exec python3 -m vllm.entrypoints.openai.api_server \
+    --model '$RESOLVED_MODEL' \
+    --served-model-name '$RESOLVED_MODEL' \
+    --host 0.0.0.0 \
+    --port '$VLLM_PORT' \
     --max-model-len 4096 \
     --gpu-memory-utilization 0.85 \
     --enable-auto-tool-choice \
-    --tool-call-parser "$TOOL_PARSER" \
-    --trust-remote-code > "${EXPERIMENT_DIR}/vllm.log" 2>&1 &
+    --tool-call-parser '$TOOL_PARSER' \
+    --trust-remote-code
+" > "${EXPERIMENT_DIR}/vllm.log" 2>&1 &
 VLLM_PID=$!
 
 echo "Waiting for vLLM server to become healthy on port $VLLM_PORT (PID: $VLLM_PID)..."
@@ -168,6 +179,10 @@ for i in $(seq 1 180); do
         echo "✓ vLLM server is healthy and ready to serve requests on port $VLLM_PORT!"
         READY=1
         break
+    fi
+    if [ $((i % 5)) -eq 0 ]; then
+        LATEST_LOG=$(tail -n 1 "${EXPERIMENT_DIR}/vllm.log" 2>/dev/null || echo "initializing...")
+        echo "  [$(date +%T)] Waiting for vLLM (${i}/180) - Status: $LATEST_LOG"
     fi
 done
 
