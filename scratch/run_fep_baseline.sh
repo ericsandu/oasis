@@ -144,15 +144,17 @@ TOOL_PARSER="${VLLM_TOOL_PARSER:-hermes}"
 echo "Starting vLLM server on isolated port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME)..."
 echo "vLLM Tool Parser: $TOOL_PARSER"
 
-# Prevent vLLM / HuggingFace from hanging on offline HPC nodes
+# Prevent vLLM / HuggingFace from hanging on offline HPC nodes and avoid CUDA fragmentation
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export VLLM_NO_USAGE_STATS=1
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 $CONTAINER_RUN bash -c "
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export VLLM_NO_USAGE_STATS=1
+export PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True'
 exec python3 -m vllm.entrypoints.openai.api_server \
     --model '$RESOLVED_MODEL' \
     --served-model-name '$RESOLVED_MODEL' \
@@ -160,6 +162,7 @@ exec python3 -m vllm.entrypoints.openai.api_server \
     --port '$VLLM_PORT' \
     --max-model-len 4096 \
     --gpu-memory-utilization 0.85 \
+    --enforce-eager \
     --enable-auto-tool-choice \
     --tool-call-parser '$TOOL_PARSER' \
     --trust-remote-code
