@@ -103,7 +103,7 @@ cleanup() {
     echo "Shutting down background servers..."
     [ -n "$VLLM_PID" ] && kill -9 "$VLLM_PID" 2>/dev/null || true
     [ -n "$GORSE_PID" ] && kill -9 "$GORSE_PID" 2>/dev/null || true
-    pkill -9 -u "$USER" -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
+    pkill -9 -u "$USER" -f "vllm" 2>/dev/null || true
     pkill -9 -u "$USER" -f "gorse-in-one" 2>/dev/null || true
     echo "Cleanup complete."
 }
@@ -111,7 +111,7 @@ trap cleanup EXIT INT TERM
 
 # Kill any orphaned processes from previous runs on this node
 echo "Cleaning up any lingering processes owned by $USER on node $(hostname)..."
-pkill -9 -u "$USER" -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
+pkill -9 -u "$USER" -f "vllm" 2>/dev/null || true
 pkill -9 -u "$USER" -f "gorse-in-one" 2>/dev/null || true
 sleep 1
 
@@ -140,9 +140,10 @@ JOB_SEED=${SLURM_JOB_ID:-$$}
 VLLM_PORT=$(( 18000 + (JOB_SEED % 5000) ))
 MODEL_BASENAME=$(basename "$RESOLVED_MODEL")
 TOOL_PARSER="${VLLM_TOOL_PARSER:-hermes}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.80}"
 
 echo "Starting vLLM server on isolated port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME)..."
-echo "vLLM Tool Parser: $TOOL_PARSER"
+echo "vLLM Tool Parser: $TOOL_PARSER | GPU Memory Utilization: $GPU_MEM_UTIL"
 
 # Prevent vLLM / HuggingFace from hanging on offline HPC nodes and avoid CUDA fragmentation
 export HF_HUB_OFFLINE=1
@@ -151,17 +152,22 @@ export VLLM_NO_USAGE_STATS=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 $CONTAINER_RUN bash -c "
+export CUDA_HOME=\${CUDA_HOME:-/usr/local/cuda}
+export PATH=\"\${CUDA_HOME}/bin:\$PATH\"
+export LD_LIBRARY_PATH=\"\${CUDA_HOME}/lib64:\$LD_LIBRARY_PATH\"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export VLLM_NO_USAGE_STATS=1
 export PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True'
+${VLLM_USE_V1:+export VLLM_USE_V1=$VLLM_USE_V1}
+
 exec python3 -m vllm.entrypoints.openai.api_server \
     --model '$RESOLVED_MODEL' \
     --served-model-name '$RESOLVED_MODEL' \
     --host 0.0.0.0 \
     --port '$VLLM_PORT' \
     --max-model-len 4096 \
-    --gpu-memory-utilization 0.85 \
+    --gpu-memory-utilization '$GPU_MEM_UTIL' \
     --enforce-eager \
     --enable-auto-tool-choice \
     --tool-call-parser '$TOOL_PARSER' \
@@ -174,8 +180,8 @@ READY=0
 for i in $(seq 1 300); do
     sleep 2
     if ! kill -0 "$VLLM_PID" 2>/dev/null; then
-        echo "ERROR: vLLM process (PID: $VLLM_PID) exited unexpectedly! Log output from ${EXPERIMENT_DIR}/vllm.log:"
-        tail -n 40 "${EXPERIMENT_DIR}/vllm.log" 2>/dev/null || true
+        echo "ERROR: vLLM process (PID: $VLLM_PID) exited unexpectedly! Root cause traceback from ${EXPERIMENT_DIR}/vllm.log:"
+        tail -n 120 "${EXPERIMENT_DIR}/vllm.log" 2>/dev/null || true
         exit 1
     fi
     if curl -s -f "http://127.0.0.1:${VLLM_PORT}/health" > /dev/null 2>&1; then
@@ -191,7 +197,7 @@ done
 
 if [ "$READY" -ne 1 ]; then
     echo "ERROR: Timed out waiting for vLLM on port $VLLM_PORT. Log snippet:"
-    tail -n 40 "${EXPERIMENT_DIR}/vllm.log" 2>/dev/null || true
+    tail -n 120 "${EXPERIMENT_DIR}/vllm.log" 2>/dev/null || true
     exit 1
 fi
 
