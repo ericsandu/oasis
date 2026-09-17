@@ -87,12 +87,19 @@ def get_vllm_model(
         top_p=top_p,
     )
 
-    return ModelFactory.create(
+    model = ModelFactory.create(
         model_platform=ModelPlatformType.VLLM,
         model_type=model_name,
         url=server_url,
         model_config_dict=config.as_dict(),
     )
+
+    # If CAMEL does not recognize the custom path string and defaults to 999_999_999,
+    # explicitly assign the Qwen context window (32,768 tokens)
+    if hasattr(model, "token_limit") and (model.token_limit is None or model.token_limit >= 999_999_999):
+        model.token_limit = 32768
+
+    return model
 
 
 def get_vllm_model_manager(

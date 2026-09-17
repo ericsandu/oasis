@@ -80,7 +80,8 @@ async def run_baseline_simulation(
     print(f"✓ Agent graph constructed with {total_agents} organic agents.")
 
     # 5. Initialize OASIS Environment with Recommender Engine
-    from oasis.social_platform import Platform, Channel, RecsysType
+    from oasis.social_platform import Platform, Channel
+    from oasis.social_platform.typing import RecsysType
     if recsys_type.lower() == "gorse":
         print("Initializing OASIS Platform with Gorse Recommender (http://127.0.0.1:8088)...")
         platform = Platform(

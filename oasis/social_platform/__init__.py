@@ -13,8 +13,12 @@
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 from .channel import Channel
 from .platform import Platform
+from .typing import ActionType, DefaultPlatformType, RecsysType
 
 __all__ = [
     "Channel",
     "Platform",
+    "ActionType",
+    "DefaultPlatformType",
+    "RecsysType",
 ]
