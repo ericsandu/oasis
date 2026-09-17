@@ -15,10 +15,14 @@
 
 set -e
 
-SIF_PATH="${1:-$HOME/oasis.sif}"
+SIF_PATH="${1:-$HOME/eric_sandu/oasis.sif}"
 if [ ! -f "$SIF_PATH" ]; then
-    # Fallback to pytorch.sif if oasis.sif has not been built yet
-    if [ -f "$HOME/pytorch.sif" ]; then
+    # Fallback checks within $HOME/eric_sandu/ and $HOME/
+    if [ -f "$HOME/eric_sandu/pytorch.sif" ]; then
+        SIF_PATH="$HOME/eric_sandu/pytorch.sif"
+    elif [ -f "$HOME/oasis.sif" ]; then
+        SIF_PATH="$HOME/oasis.sif"
+    elif [ -f "$HOME/pytorch.sif" ]; then
         SIF_PATH="$HOME/pytorch.sif"
     fi
 fi

@@ -37,6 +37,9 @@ echo "===================================================================="
 
 # 1. Locate Container SIF Image
 SIF_CANDIDATES=(
+    "$HOME/eric_sandu/oasis.sif"
+    "$HOME/eric_sandu/camel-oasis.sif"
+    "$HOME/eric_sandu/pytorch.sif"
     "$HOME/oasis.sif"
     "$HOME/camel-oasis.sif"
     "$HOME/pytorch.sif"
