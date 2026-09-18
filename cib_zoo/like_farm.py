@@ -1,47 +1,43 @@
-# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
-# Licensed under the Apache License, Version 2.0 (the “License”);
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an “AS IS” BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
-from typing import Any
+"""Backward-compatible shim for legacy Like Farm attack script."""
 
-from oasis import ActionType, ManualAction
+from __future__ import annotations
+
+import warnings
+from typing import Any, Union
+
+from cib_zoo.primitives.like import LikePrimitive
 
 
-async def execute_like_farm(env: Any, bot_ids: list[int], target_post_ids: list[str]):
-    """
-    Executes a Like-farming attack where a specific group of bots provides likes/reactions
-    to target posts within a designated time window.
+async def execute_like_farm(
+    env: Any,
+    bot_ids: list[int],
+    target_post_ids: list[Union[int, str]],
+) -> None:
+    """Backward-compatible adapter delegating to modular LikePrimitive.
 
     Args:
-        env (SocialEnvironment): The OASIS social environment.
-        bot_ids (List[int]): The list of agent IDs representing the botnet.
-        target_post_ids (List[str]): The list of target post IDs to inflate.
+        env: The OASIS social environment.
+        bot_ids: List of agent IDs representing the botnet squad.
+        target_post_ids: Target post IDs to like.
     """
-    actions = {}
+    warnings.warn(
+        "execute_like_farm is deprecated and maintained as a backward-compatible shim. "
+        "Use CoEngagementPattern or LikePrimitive directly.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
-    # Assign like actions to each bot
+    actions = {}
     for bot_id in bot_ids:
         agent = env.agent_graph.get_agent(bot_id)
         bot_actions = []
         for post_id in target_post_ids:
-            bot_actions.append(
-                ManualAction(
-                    action_type=ActionType.LIKE_POST,
-                    action_args={"post_id": post_id}
-                )
-            )
+            primitive = LikePrimitive(post_id=int(post_id))
+            bot_actions.append(primitive.generate())
+
+        if hasattr(agent, "filter_actions"):
+            bot_actions = agent.filter_actions(bot_actions)
         actions[agent] = bot_actions
 
-    print(f"[Like Farm] Executing like farm attack with {len(bot_ids)} bots on {len(target_post_ids)} target posts.")
     if actions:
         await env.step(actions)
-    print("[Like Farm] Attack complete.")

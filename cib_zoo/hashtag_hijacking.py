@@ -1,47 +1,49 @@
-# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
-# Licensed under the Apache License, Version 2.0 (the “License”);
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an “AS IS” BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+"""Backward-compatible shim for legacy Hashtag Hijacking attack script."""
+
+from __future__ import annotations
+
+import warnings
 from typing import Any
 
-from oasis import ActionType, ManualAction
+from cib_zoo.primitives.post import PostPrimitive
 
 
-async def execute_hashtag_hijacking(env: Any, bot_ids: list[int], target_hashtag: str, num_posts: int):
-    """
-    Implements Hashtag Hijacking / Ephemeral Astroturfing.
-    Bots push a keyword rapidly based on targeted topics to game the hot-score algorithm.
+async def execute_hashtag_hijacking(
+    env: Any,
+    bot_ids: list[int],
+    target_hashtag: str,
+    num_posts: int,
+) -> None:
+    """Backward-compatible adapter delegating to modular PostPrimitive and AstroturfPattern.
 
     Args:
-        env (SocialEnvironment): The OASIS social environment.
-        bot_ids (List[int]): The list of agent IDs representing the botnet.
-        target_hashtag (str): The keyword or hashtag to spam.
-        num_posts (int): Number of posts each bot will generate.
+        env: The OASIS social environment.
+        bot_ids: List of agent IDs representing the botnet squad.
+        target_hashtag: The hashtag keyword to promote.
+        num_posts: Number of posts generated per bot.
     """
-    actions = {}
+    warnings.warn(
+        "execute_hashtag_hijacking is deprecated and maintained as a backward-compatible shim. "
+        "Use AstroturfPattern or PostPrimitive directly.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
+    clean_tag = target_hashtag.strip().lstrip("#")
+    actions = {}
     for bot_id in bot_ids:
         agent = env.agent_graph.get_agent(bot_id)
         bot_actions = []
         for i in range(num_posts):
-            bot_actions.append(
-                ManualAction(
-                    action_type=ActionType.CREATE_POST,
-                    action_args={"content": f"Here is some highly irrelevant or promotional content. {target_hashtag} #{i}"}
-                )
+            primitive = PostPrimitive(
+                content=f"Here is some highly promotional content #{i}",
+                hashtags=[clean_tag],
             )
+            bot_actions.append(primitive.generate())
+
+        if hasattr(agent, "filter_actions"):
+            bot_actions = agent.filter_actions(bot_actions)
         actions[agent] = bot_actions
 
-    print(f"[Hashtag Hijacking] Executing hashtag hijacking with {len(bot_ids)} bots using hashtag {target_hashtag}.")
     if actions:
         await env.step(actions)
-    print("[Hashtag Hijacking] Attack complete.")
