@@ -11,6 +11,7 @@ import os
 import sys
 import time
 from pathlib import Path
+
 import pytest
 
 # Ensure oasis root is on sys.path
@@ -36,13 +37,15 @@ def parse_args() -> argparse.Namespace:
         description="Run all OASIS CIB modular test suites with thread caps and structured reporting."
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         default=True,
         help="Run pytest in verbose mode (default: True).",
     )
     parser.add_argument(
-        "-k", "--keyword",
+        "-k",
+        "--keyword",
         type=str,
         default="",
         help="Pytest keyword expression to filter tests.",
@@ -67,7 +70,7 @@ def main() -> int:
     print("=" * 80)
     print("  OASIS CIB MODULAR ENGINE — GLOBAL VERIFICATION TEST RUNNER")
     print(f"  Working Directory: {_oasis_root}")
-    print(f"  Thread Limit:      4 threads (OMP, OpenBLAS, MKL, Torch)")
+    print("  Thread Limit:      4 threads (OMP, OpenBLAS, MKL, Torch)")
     print(f"  Target Test Suite: {args.test_dir}")
     print("=" * 80)
 
@@ -87,7 +90,9 @@ def main() -> int:
     if exit_code == 0:
         print(f"  [SUCCESS] All verification tests passed in {duration:.2f}s!")
     else:
-        print(f"  [FAILURE] Tests finished with exit code {exit_code} in {duration:.2f}s.")
+        print(
+            f"  [FAILURE] Tests finished with exit code {exit_code} in {duration:.2f}s."
+        )
     print("=" * 80)
 
     return int(exit_code)
