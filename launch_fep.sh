@@ -51,7 +51,7 @@ if command -v apptainer &> /dev/null && [ -f "${CONTAINER_IMAGE}" ]; then
         --bind "${OASIS_DIR}:/workspace" \
         --pwd /app \
         "${CONTAINER_IMAGE}" \
-        poetry run python cib_zoo/runner/run_fep.py \
+        python3 cib_zoo/runner/run_fep.py \
             --preset "${PRESET}" \
             --num-bots "${NUM_BOTS}" \
             --max-steps "${MAX_STEPS}" \

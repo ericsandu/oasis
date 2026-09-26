@@ -81,9 +81,12 @@ if [ -n "$CONTAINER_SIF" ] && command -v apptainer &> /dev/null; then
         --bind ${BATCH_DIR}:/workspace/experiments/current_batch \
         --pwd /app \
         ${CONTAINER_SIF}"
+    # Container has all packages pre-installed globally in python3
+    PY_EXEC="${CONTAINER_RUN} python3"
 else
     echo "Notice: No Apptainer container found or apptainer command unavailable. Running directly in host Poetry environment."
     CONTAINER_RUN=""
+    PY_EXEC="poetry run python"
 fi
 
 # 2. Resolve Model Path
@@ -230,7 +233,7 @@ for run_spec in "${RUNS[@]}"; do
 
     RUN_START_TIME=$(date +%s)
 
-    ${CONTAINER_RUN} poetry run python cib_zoo/runner/run_fep.py \
+    ${PY_EXEC} cib_zoo/runner/run_fep.py \
         --preset "${PRESET}" \
         --topology "${TOPOLOGY}" \
         --topic-mode "${TOPIC_MODE}" \
@@ -257,7 +260,7 @@ echo "===================================================================="
 SUMMARY_JSON="${BATCH_DIR}/cib_batch_summary.json"
 DASHBOARD_PNG="${BATCH_DIR}/cib_batch_dashboard.png"
 
-${CONTAINER_RUN} poetry run python cib_zoo/runner/aggregate_batch_results.py \
+${PY_EXEC} cib_zoo/runner/aggregate_batch_results.py \
     --batch-dir "${BATCH_DIR}" \
     --output-json "${SUMMARY_JSON}" \
     --output-png "${DASHBOARD_PNG}"
