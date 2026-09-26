@@ -247,6 +247,40 @@ class OasisEnv:
         if self.platform_type == DefaultPlatformType.TWITTER:
             self.platform.sandbox_clock.time_step += 1
 
+    async def step_jev(
+        self,
+        step_index: int | None = None,
+        base_time: datetime | str | float | None = None,
+        agent_feeds: dict[int, list[Any]] | None = None,
+        active_agent_ids: list[int] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        r"""Execute one simulation step using JEV (Joint Evaluation Vectorization) mode.
+
+        Seamlessly bridges OasisEnv into high-performance JEV execution pipeline
+        with 1-token logit classification, inverted prefix caching, and micro-time scheduling.
+
+        Args:
+            step_index: Integer simulation step index.
+            base_time: Base simulation start time.
+            agent_feeds: Optional pre-constructed personalized feeds for agents.
+            active_agent_ids: Optional list of agent IDs to evaluate.
+            **kwargs: Extra parameters passed to JEVEnvironment.
+
+        Returns:
+            JEVStepResult containing step analytics, action counts, and scheduled actions.
+        """
+        if not hasattr(self, "_jev_engine") or self._jev_engine is None:
+            from oasis.environment.jev_env import JEVEnvironment
+
+            self._jev_engine = JEVEnvironment(self, **kwargs)
+        return await self._jev_engine.step_jev(
+            step_index=step_index,
+            base_time=base_time,
+            agent_feeds=agent_feeds,
+            active_agent_ids=active_agent_ids,
+        )
+
     async def close(self) -> None:
         r"""Stop the platform and close the environment.
         """

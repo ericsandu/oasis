@@ -11,10 +11,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023-2026 @ CAMEL-AI.org. All Rights Reserved. ===========
+from .jev_classifier import (
+    ClassificationResult,
+    EvalItem,
+    JEVClassifierClient,
+    MockJEVClassifierClient,
+    VLLMJEVClassifierClient,
+    compute_softmax,
+    resolve_intra_feed_budget,
+    select_best_action,
+)
 from .vllm_client import check_vllm_health, get_vllm_model, get_vllm_model_manager
 
 __all__ = [
+    "ClassificationResult",
+    "EvalItem",
+    "JEVClassifierClient",
+    "MockJEVClassifierClient",
+    "VLLMJEVClassifierClient",
     "check_vllm_health",
+    "compute_softmax",
     "get_vllm_model",
     "get_vllm_model_manager",
+    "resolve_intra_feed_budget",
+    "select_best_action",
 ]
+

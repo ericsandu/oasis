@@ -17,3 +17,19 @@ import sys
 # Add the project root directory to sys.path
 root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
 sys.path.insert(0, root_path)
+
+# Limit threads to max 4 to prevent host machine CPU overload
+for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS", "TORCH_NUM_THREADS"):
+    os.environ.setdefault(var, "4")
+
+# Safe mock for heavy ML packages if running in lightweight CPU environment
+for pkg in (
+    "torch", "torch.nn", "sentence_transformers", "transformers",
+    "sklearn", "sklearn.feature_extraction", "sklearn.feature_extraction.text",
+    "sklearn.metrics", "sklearn.metrics.pairwise"
+):
+    try:
+        __import__(pkg)
+    except ImportError:
+        from unittest.mock import MagicMock
+        sys.modules[pkg] = MagicMock()

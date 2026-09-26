@@ -18,11 +18,19 @@ from .agents_generator import (
                                generate_reddit_agent_graph,
                                generate_twitter_agent_graph,
 )
+from .belief_state import ActionLogItem, BeliefState
+from .jev_prompt_builder import AgentSuffixData, JEVPromptBuilder, PostPrefixData
 
 __all__ = [
+                               "ActionLogItem",
                                "AgentGraph",
+                               "AgentSuffixData",
+                               "BeliefState",
+                               "JEVPromptBuilder",
+                               "PostPrefixData",
                                "SocialAgent",
                                "generate_agents_100w",
                                "generate_reddit_agent_graph",
-                               "generate_twitter_agent_graph"
+                               "generate_twitter_agent_graph",
 ]
+
