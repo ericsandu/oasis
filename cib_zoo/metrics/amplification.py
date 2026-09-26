@@ -2,9 +2,36 @@
 
 from __future__ import annotations
 
+import json
 import math
+import re
 import sqlite3
 from typing import Optional
+
+
+def is_post_trace_match(info_str: str, post_id: int) -> bool:
+    """Check if a trace.info string refers specifically to the target post_id.
+
+    Avoids raw substring matching bugs where post_id=1 would match user_id=105
+    or conversational text like '15 minutes' or post_id=10.
+    """
+    if not info_str:
+        return False
+    try:
+        data = json.loads(info_str)
+        if isinstance(data, dict):
+            if data.get("post_id") == post_id:
+                return True
+            # Also check nested post_id if present
+            if "post" in data and isinstance(data["post"], dict):
+                if data["post"].get("post_id") == post_id:
+                    return True
+    except (ValueError, TypeError):
+        pass
+
+    # Regex fallback for non-JSON or shorthand formats (e.g. 'post:1', 'post_id: 1')
+    pattern = rf'(?:post_id["\':\s]+|post:)\s*{post_id}\b'
+    return bool(re.search(pattern, info_str))
 
 
 def calculate_exposure_from_db(
@@ -50,8 +77,10 @@ def calculate_exposure_from_db(
 
         trace_count = 0
         if "trace" in existing_tables:
-            cursor.execute("SELECT COUNT(*) FROM trace WHERE info LIKE ?", (f"%{post_id}%",))
-            trace_count = cursor.fetchone()[0]
+            cursor.execute("SELECT info FROM trace")
+            for (info_str,) in cursor.fetchall():
+                if is_post_trace_match(info_str, post_id):
+                    trace_count += 1
 
         # Base exposure plus weighted algorithmic and interaction reach
         # Negative signals (dislikes/mutes/reports) can optionally reduce net exposure

@@ -279,3 +279,49 @@ def test_metric_assertions(tmp_path):
     CIBAgent.reset_registry()
     assert CIBAgent.get_instance_count() == 0
 
+
+def test_exact_post_trace_matching_no_substring_collision(tmp_path):
+    """Verify that calculate_exposure_from_db uses exact post_id matching without substring collisions."""
+    import json
+    from cib_zoo.metrics.amplification import calculate_exposure_from_db, is_post_trace_match
+
+    # 1. Test helper matching directly
+    assert is_post_trace_match(json.dumps({"post_id": 1, "action": "like"}), 1) is True
+    assert is_post_trace_match(json.dumps({"post_id": 10, "action": "like"}), 1) is False
+    assert is_post_trace_match(json.dumps({"user_id": 101, "content": "15 points scored in F1"}), 1) is False
+    assert is_post_trace_match("post:1", 1) is True
+    assert is_post_trace_match("post:10", 1) is False
+    assert is_post_trace_match(json.dumps({"post_id": 2}), 2) is True
+    assert is_post_trace_match(json.dumps({"post_id": 20}), 2) is False
+
+    # 2. Test in database context
+    db_file = tmp_path / "test_collision.db"
+    _init_test_db(str(db_file))
+
+    conn = sqlite3.connect(str(db_file))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO post VALUES (1, 1, 'Target Post 1', '0')")
+    cur.execute("INSERT INTO post VALUES (2, 2, 'Target Post 2', '0')")
+
+    # Injects traces that could collide under unconstrained LIKE '%1%'
+    # User 105 posts about 15 minutes, with post_id 10
+    cur.execute("INSERT INTO trace VALUES (1, 105, 'create_post', ?, '0')", (json.dumps({"content": "15 minutes in F1", "post_id": 10}),))
+    # User 102 likes post 12
+    cur.execute("INSERT INTO trace VALUES (2, 102, 'like_post', ?, '0')", (json.dumps({"post_id": 12}),))
+    # User 103 likes post 1
+    cur.execute("INSERT INTO trace VALUES (3, 103, 'like_post', ?, '0')", (json.dumps({"post_id": 1}),))
+    # User 104 likes post 2
+    cur.execute("INSERT INTO trace VALUES (4, 104, 'like_post', ?, '0')", (json.dumps({"post_id": 2}),))
+    conn.commit()
+    conn.close()
+
+    # Post 1 has base 1.0 + 1 trace match * 0.5 = 1.5
+    exp1 = calculate_exposure_from_db(str(db_file), post_id=1)
+    # Post 2 has base 1.0 + 1 trace match * 0.5 = 1.5
+    exp2 = calculate_exposure_from_db(str(db_file), post_id=2)
+
+    assert exp1 == 1.5, f"Expected 1.5, got {exp1} (spurious substring match detected!)"
+    assert exp2 == 1.5, f"Expected 1.5, got {exp2} (spurious substring match detected!)"
+    assert exp1 == exp2
+
+
