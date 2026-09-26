@@ -464,11 +464,12 @@ def rec_sys_personalized_twh(
             user_previous_post_all[post['user_id']].append(post['content'])
             user_previous_post[post['user_id']] = post['content']
             # Get the creation times of all tweets, assigning scores based on
-            # how recent they are, note that this algorithm can run for a
-            # maximum of 90 time steps
+            # how recent they are. Clamp time diff to 270.0 to prevent log(<=0) NaN
+            # on long-horizon simulations (>90 steps).
+            time_delta = min(270.0, max(0.0, float(current_time - int(post['created_at']))))
             date_score.append(
-                np.log(
-                    (271.8 - (current_time - int(post['created_at']))) / 100))
+                np.log((271.8 - time_delta) / 100.0)
+            )
 
     date_score_np = np.array(date_score)
 

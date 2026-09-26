@@ -54,7 +54,27 @@ def calculate_exposure_from_db(
             trace_count = cursor.fetchone()[0]
 
         # Base exposure plus weighted algorithmic and interaction reach
-        total_exposure = float(1.0 + (rec_impressions * 2.0) + (likes_count * 1.5) + (comments_count * 2.0) + (trace_count * 0.5))
+        # Negative signals (dislikes/mutes/reports) can optionally reduce net exposure
+        negative_penalty = 0.0
+        dislikes_count = 0
+        if "dislike" in existing_tables:
+            cursor.execute("SELECT COUNT(*) FROM dislike WHERE post_id = ?", (post_id,))
+            dislikes_count = cursor.fetchone()[0]
+
+        mutes_reports_count = 0
+        if "report" in existing_tables:
+            cursor.execute("SELECT COUNT(*) FROM report WHERE post_id = ?", (post_id,))
+            mutes_reports_count += cursor.fetchone()[0]
+
+        total_exposure = float(
+            1.0
+            + (rec_impressions * 2.0)
+            + (likes_count * 1.5)
+            + (comments_count * 2.0)
+            + (trace_count * 0.5)
+            - (dislikes_count * 1.5)
+            - (mutes_reports_count * 2.0)
+        )
         return total_exposure
 
     finally:
@@ -68,11 +88,15 @@ def calculate_causal_amplification(
     n_bots: int,
     n_seed: int = 1,
     epsilon: float = 1e-6,
+    mode: str = "ratio",
 ) -> float:
     """Calculate the Causal Algorithmic Amplification metric A(s, r).
 
-    Formula:
-        A(s, r) = (N_seed / N_bots) * (Exposure(Payload_s | r) / (Exposure(Baseline_org | r) + epsilon))
+    Supports two modes:
+    - "ratio": Classical multiplier relative to baseline:
+          A(s, r) = (N_seed / N_bots) * (Exposure(Payload_s) / (Exposure(Baseline_org) + epsilon))
+    - "difference": Additive causal treatment effect normalized by bot cost:
+          A(s, r) = (Exposure(Payload_s) - Exposure(Baseline_org)) / N_bots
 
     Args:
         db_path: Path to the SQLite simulation database.
@@ -81,19 +105,76 @@ def calculate_causal_amplification(
         n_bots: Number of coordinated bots participating in the attack squad.
         n_seed: Number of initial seed authors (default 1).
         epsilon: Small epsilon preventing division by zero.
+        mode: Metric computation mode ('ratio' or 'difference').
 
     Returns:
-        A(s, r) amplification ratio scalar.
+        Amplification score scalar (can be negative in 'difference' mode if attack backfires).
     """
-    if n_bots <= 0:
-        raise ValueError(f"n_bots must be positive, got {n_bots}")
-    if n_seed <= 0:
-        raise ValueError(f"n_seed must be positive, got {n_seed}")
+    assert n_bots > 0, f"n_bots must be positive, got {n_bots}"
+    assert n_seed > 0, f"n_seed must be positive, got {n_seed}"
 
     exposure_payload = calculate_exposure_from_db(db_path, payload_post_id, epsilon)
     exposure_baseline = calculate_exposure_from_db(db_path, baseline_post_id, epsilon)
+
+    if mode == "difference":
+        return float(exposure_payload - exposure_baseline) / float(n_bots)
 
     resource_ratio = float(n_seed) / float(n_bots)
     relative_exposure = exposure_payload / (exposure_baseline + epsilon)
 
     return resource_ratio * relative_exposure
+
+
+def calculate_differential_amplification(
+    db_path: str,
+    payload_post_id: int,
+    baseline_post_id: int,
+    n_bots: int,
+    n_seed: int = 1,
+    min_expected_bot_actions: int = 0,
+) -> float:
+    """Calculate the unified additive causal lift per bot unit:
+
+        Delta A(s, r) = (Exposure(Payload) - Exposure(Baseline)) / N_bots
+
+    Provides mathematical stability for both cold-start (new) topics starting at 0
+    and established topics starting at a non-zero baseline. Naturally models negative
+    backfire / chilling effects when Delta Exposure < 0.
+
+    Args:
+        db_path: Path to simulation database.
+        payload_post_id: Post ID of the CIB attack payload.
+        baseline_post_id: Post ID of the organic control post.
+        n_bots: Number of bots in the campaign squad.
+        n_seed: Number of seed authors.
+        min_expected_bot_actions: Minimum threshold of bot actions expected in trace.
+
+    Returns:
+        Scalar differential amplification.
+    """
+    assert n_bots > 0, f"n_bots must be positive, got {n_bots}"
+    assert n_seed > 0, f"n_seed must be positive, got {n_seed}"
+
+    # Verify bot squad activity if required
+    if min_expected_bot_actions > 0:
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trace'")
+            if cursor.fetchone():
+                cursor.execute("SELECT COUNT(*) FROM trace WHERE user_id >= 0")
+                total_actions = cursor.fetchone()[0]
+                assert total_actions >= min_expected_bot_actions, (
+                    f"Expected at least {min_expected_bot_actions} actions in trace, found {total_actions}"
+                )
+        finally:
+            conn.close()
+
+    return calculate_causal_amplification(
+        db_path=db_path,
+        payload_post_id=payload_post_id,
+        baseline_post_id=baseline_post_id,
+        n_bots=n_bots,
+        n_seed=n_seed,
+        mode="difference",
+    )
