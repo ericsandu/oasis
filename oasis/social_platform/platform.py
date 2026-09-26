@@ -86,6 +86,8 @@ class Platform:
         self.sandbox_clock = sandbox_clock
 
         self.db, self.db_cursor = create_db(self.db_path)
+        self.db.execute("PRAGMA journal_mode = WAL")
+        self.db.execute("PRAGMA busy_timeout = 5000")
         self.db.execute("PRAGMA synchronous = OFF")
 
         self.channel = channel or Channel()

@@ -2,6 +2,7 @@
 
 import sqlite3
 import pytest
+from cib_zoo.agent.cib_agent import CIBAgent
 from cib_zoo.metrics.amplification import (
     calculate_causal_amplification,
     calculate_differential_amplification,
@@ -217,7 +218,7 @@ def test_metric_assertions(tmp_path):
     conn.commit()
     conn.close()
 
-    with pytest.raises(AssertionError, match="Expected at least 10 actions"):
+    with pytest.raises(AssertionError, match="Expected at least 10 bot actions"):
         calculate_differential_amplification(
             db_path=str(db_file),
             payload_post_id=1,
@@ -225,3 +226,56 @@ def test_metric_assertions(tmp_path):
             n_bots=5,
             min_expected_bot_actions=10,
         )
+
+    # Test filtering by bot_ids explicitly
+    with pytest.raises(AssertionError, match="Expected at least 5 bot actions"):
+        calculate_differential_amplification(
+            db_path=str(db_file),
+            payload_post_id=1,
+            baseline_post_id=2,
+            n_bots=5,
+            min_expected_bot_actions=5,
+            bot_ids=[10, 11],
+        )
+
+    # Test dynamic CIBAgent registry resolution without arbitrary magic-number caps
+    CIBAgent.reset_registry()
+    assert CIBAgent.get_instance_count() == 0
+    assert CIBAgent.get_bot_ids() == []
+
+    CIBAgent._registry.add(50)
+    CIBAgent._registry.add(51)
+    assert CIBAgent.get_instance_count() == 2
+    assert CIBAgent.get_bot_ids() == [50, 51]
+    assert CIBAgent.is_bot(50) is True
+    assert CIBAgent.is_bot(10) is False
+
+    # The existing trace actions were performed by user_id 10 and 11, not bots (50, 51)
+    # So dynamic bot action count is 0, raising error when min_expected_bot_actions >= 1
+    with pytest.raises(AssertionError, match="Expected at least 1 bot actions"):
+        calculate_differential_amplification(
+            db_path=str(db_file),
+            payload_post_id=1,
+            baseline_post_id=2,
+            min_expected_bot_actions=1,
+        )
+
+    # Add bot action with registered bot ID 50 and verify dynamic resolution recognizes it
+    conn = sqlite3.connect(str(db_file))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO trace VALUES (3, 50, 'like', 'post:1', '0')")
+    conn.commit()
+    conn.close()
+
+    res = calculate_differential_amplification(
+        db_path=str(db_file),
+        payload_post_id=1,
+        baseline_post_id=2,
+        min_expected_bot_actions=1,
+    )
+    assert isinstance(res, float)
+
+    # Clean up registry
+    CIBAgent.reset_registry()
+    assert CIBAgent.get_instance_count() == 0
+

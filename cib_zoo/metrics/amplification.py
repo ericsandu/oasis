@@ -129,30 +129,36 @@ def calculate_differential_amplification(
     db_path: str,
     payload_post_id: int,
     baseline_post_id: int,
-    n_bots: int,
+    n_bots: Optional[int] = None,
     n_seed: int = 1,
     min_expected_bot_actions: int = 0,
+    bot_ids: Optional[list[int]] = None,
 ) -> float:
     """Calculate the unified additive causal lift per bot unit:
 
         Delta A(s, r) = (Exposure(Payload) - Exposure(Baseline)) / N_bots
 
-    Provides mathematical stability for both cold-start (new) topics starting at 0
-    and established topics starting at a non-zero baseline. Naturally models negative
-    backfire / chilling effects when Delta Exposure < 0.
+    Dynamically resolves bot identities and count from the CIBAgent registry,
+    eliminating arbitrary ID thresholds or magic-number caps on user count.
 
     Args:
         db_path: Path to simulation database.
         payload_post_id: Post ID of the CIB attack payload.
         baseline_post_id: Post ID of the organic control post.
-        n_bots: Number of bots in the campaign squad.
+        n_bots: Optional number of bots. If omitted, resolved dynamically from CIBAgent.get_instance_count().
         n_seed: Number of seed authors.
         min_expected_bot_actions: Minimum threshold of bot actions expected in trace.
+        bot_ids: Optional explicit list of bot user IDs. If omitted, resolved from CIBAgent.get_bot_ids().
 
     Returns:
         Scalar differential amplification.
     """
-    assert n_bots > 0, f"n_bots must be positive, got {n_bots}"
+    from cib_zoo.agent.cib_agent import CIBAgent
+
+    resolved_bot_ids = list(bot_ids) if bot_ids is not None else CIBAgent.get_bot_ids()
+    effective_n_bots = n_bots if n_bots is not None else CIBAgent.get_instance_count()
+
+    assert effective_n_bots > 0, f"n_bots must be positive, got {effective_n_bots}"
     assert n_seed > 0, f"n_seed must be positive, got {n_seed}"
 
     # Verify bot squad activity if required
@@ -162,10 +168,18 @@ def calculate_differential_amplification(
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trace'")
             if cursor.fetchone():
-                cursor.execute("SELECT COUNT(*) FROM trace WHERE user_id >= 0")
+                if resolved_bot_ids:
+                    placeholders = ",".join("?" for _ in resolved_bot_ids)
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM trace WHERE user_id IN ({placeholders})",
+                        tuple(resolved_bot_ids),
+                    )
+                else:
+                    cursor.execute("SELECT COUNT(*) FROM trace WHERE user_id >= 0")
+
                 total_actions = cursor.fetchone()[0]
                 assert total_actions >= min_expected_bot_actions, (
-                    f"Expected at least {min_expected_bot_actions} actions in trace, found {total_actions}"
+                    f"Expected at least {min_expected_bot_actions} bot actions in trace, found {total_actions}"
                 )
         finally:
             conn.close()
@@ -174,7 +188,7 @@ def calculate_differential_amplification(
         db_path=db_path,
         payload_post_id=payload_post_id,
         baseline_post_id=baseline_post_id,
-        n_bots=n_bots,
+        n_bots=effective_n_bots,
         n_seed=n_seed,
         mode="difference",
     )

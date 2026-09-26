@@ -76,7 +76,10 @@ class CIBAgent(SocialAgent):
     - Strict enforcement of max_actions_per_step and total_budget.
     - Strict occurrence threshold quotas per ActionType.
     - In-memory perception caching for client actions (REFRESH, SEARCH_POSTS, SEARCH_USER).
+    - Dynamic class-level bot registry eliminating hardcoded magic-number ID partitioning.
     """
+
+    _registry: set[int] = set()
 
     def __init__(
         self,
@@ -102,6 +105,9 @@ class CIBAgent(SocialAgent):
             **kwargs,
         )
 
+        # Register this bot instance
+        CIBAgent._registry.add(agent_id)
+
         # Initialize CIB budget limiter
         self.budget: BudgetLimiter = BudgetLimiter(
             max_actions_per_step=max_actions_per_step,
@@ -118,6 +124,26 @@ class CIBAgent(SocialAgent):
             action=SocialAction(agent_id, self.channel),
             perception=self.perception,
         )
+
+    @classmethod
+    def get_instance_count(cls) -> int:
+        """Return the total number of registered CIB bot instances."""
+        return len(cls._registry)
+
+    @classmethod
+    def get_bot_ids(cls) -> list[int]:
+        """Return a sorted list of all registered CIB bot IDs."""
+        return sorted(cls._registry)
+
+    @classmethod
+    def is_bot(cls, agent_id: int) -> bool:
+        """Check if an agent ID belongs to a registered CIB bot instance."""
+        return agent_id in cls._registry
+
+    @classmethod
+    def reset_registry(cls) -> None:
+        """Reset the bot instance registry."""
+        cls._registry.clear()
 
     def reset_step_budget(self) -> None:
         """Called at the beginning of each simulation step."""

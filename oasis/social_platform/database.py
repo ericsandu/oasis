@@ -92,6 +92,8 @@ def create_db(db_path: str | None = None):
     # Connect to the database:
     print("db_path", db_path)
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     cursor = conn.cursor()
 
     try:
