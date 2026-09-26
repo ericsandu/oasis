@@ -24,15 +24,30 @@ export OPENBLAS_NUM_THREADS=4
 export MKL_NUM_THREADS=4
 export TORCH_NUM_THREADS=4
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve true OASIS project root on host
+# In SLURM batch jobs, ${BASH_SOURCE[0]} points to /var/spool/slurmd/job*/slurm_script (root-owned)
+# We must use $SLURM_SUBMIT_DIR (where sbatch was invoked) so all files land in the oasis repo
+if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    OASIS_DIR="${SLURM_SUBMIT_DIR}"
+elif [ -n "${SLURM_JOB_ID:-}" ]; then
+    OASIS_DIR="$(pwd)"
+else
+    OASIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+cd "${OASIS_DIR}"
+
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-BATCH_DIR="${SCRIPT_DIR}/experiments/batch_${TIMESTAMP}"
+BATCH_DIR="${OASIS_DIR}/experiments/batch_${TIMESTAMP}"
 mkdir -p "${BATCH_DIR}"
+mkdir -p "${OASIS_DIR}/data"
+mkdir -p "${OASIS_DIR}/experiments"
 
 echo "===================================================================="
 echo "Starting OASIS CIB Batch Experiment Matrix on Node: $(hostname)"
 echo "Job ID: ${SLURM_JOB_ID:-manual} | Partition: ${SLURM_JOB_PARTITION:-local}"
 echo "CUDA Device: ${CUDA_VISIBLE_DEVICES:-0}"
+echo "Project Directory: ${OASIS_DIR}"
 echo "Output Directory: ${BATCH_DIR}"
 echo "Start Time: $(date)"
 echo "===================================================================="
@@ -44,7 +59,7 @@ SIF_CANDIDATES=(
     "$HOME/oasis.sif"
     "$HOME/camel-oasis.sif"
     "$HOME/pytorch.sif"
-    "${SCRIPT_DIR}/oasis.sif"
+    "${OASIS_DIR}/oasis.sif"
 )
 
 CONTAINER_SIF=""
@@ -59,9 +74,12 @@ if [ -n "$CONTAINER_SIF" ] && command -v apptainer &> /dev/null; then
     echo "✓ Using Apptainer Container: ${CONTAINER_SIF}"
     CONTAINER_RUN="apptainer exec --nv \
         --bind $HOME/models:/models \
-        --bind ${SCRIPT_DIR}:/workspace \
+        --bind ${OASIS_DIR}:/app \
+        --bind ${OASIS_DIR}:/workspace \
+        --bind ${OASIS_DIR}/data:/app/data \
+        --bind ${OASIS_DIR}/experiments:/app/experiments \
         --bind ${BATCH_DIR}:/workspace/experiments/current_batch \
-        --pwd /workspace \
+        --pwd /app \
         ${CONTAINER_SIF}"
 else
     echo "Notice: No Apptainer container found or apptainer command unavailable. Running directly in host Poetry environment."
