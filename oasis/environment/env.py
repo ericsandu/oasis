@@ -14,6 +14,7 @@
 import asyncio
 import logging
 import os
+import sqlite3
 from datetime import datetime
 
 from oasis.environment.env_action import LLMAction, ManualAction
@@ -112,6 +113,59 @@ class OasisEnv:
             raise ValueError(
                 f"Invalid platform: {platform}. You should pass a "
                 "DefaultPlatformType or a Platform instance.")
+
+        self.database_path = database_path or getattr(self.platform, "db_path", None)
+        self.sync_agents_to_db()
+
+    def sync_agents_to_db(self) -> None:
+        """Ensure all agents in agent_graph exist in the SQLite user table."""
+        target_db = self.database_path or getattr(self.platform, "db_path", None)
+        if not target_db or not self.agent_graph:
+            return
+        try:
+            conn = sqlite3.connect(target_db)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='user'"
+            )
+            if not cur.fetchone():
+                conn.close()
+                return
+
+            agents = []
+            if hasattr(self.agent_graph, "agent_mappings"):
+                agents = list(self.agent_graph.agent_mappings.values())
+            elif hasattr(self.agent_graph, "get_agents"):
+                raw_agents = self.agent_graph.get_agents()
+                agents = [a[1] if isinstance(a, tuple) else a for a in raw_agents]
+
+            rows = []
+            for agent in agents:
+                if hasattr(agent, "to_db_user_row"):
+                    rows.append(agent.to_db_user_row())
+                elif hasattr(agent, "user_info"):
+                    info = agent.user_info
+                    aid = getattr(agent, "social_agent_id", getattr(agent, "agent_id", 0))
+                    rows.append((
+                        aid,
+                        aid,
+                        getattr(info, "user_name", f"user_{aid}"),
+                        getattr(info, "name", f"User {aid}"),
+                        getattr(info, "description", None) or f"Profile for {aid}",
+                        "2026-09-26 00:00:00",
+                        0,
+                        0,
+                    ))
+            if rows:
+                cur.executemany(
+                    "INSERT OR IGNORE INTO user (user_id, agent_id, user_name, name, bio, created_at, num_followings, num_followers) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                conn.commit()
+            conn.close()
+        except Exception as e:
+            env_log.warning(f"Failed to sync agents to database: {e}")
 
     async def reset(self) -> None:
         r"""Start the platform and sign up the agents."""

@@ -121,6 +121,21 @@ class SocialAgent(ChatAgent):
             "\n"
             "What do you think Helen should do?")
 
+    def to_db_user_row(self, created_at: str = "2026-09-26 00:00:00") -> tuple:
+        """Export standardized SQLite user table row tuple for this agent."""
+        info = self.user_info
+        return (
+            self.social_agent_id,
+            self.social_agent_id,
+            getattr(info, "user_name", f"user_{self.social_agent_id}"),
+            getattr(info, "name", f"User {self.social_agent_id}"),
+            getattr(info, "description", None)
+            or f"Profile for {getattr(info, 'name', self.social_agent_id)}",
+            created_at,
+            0,
+            0,
+        )
+
     async def perform_action_by_llm(self):
         # Get posts:
         env_prompt = await self.env.to_text_prompt()

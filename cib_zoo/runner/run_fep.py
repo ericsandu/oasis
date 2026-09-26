@@ -57,7 +57,7 @@ from cib_zoo.metrics.amplification import (
     calculate_exposure_from_db,
 )
 from cib_zoo.presets import create_s1_campaign, create_s2_campaign, create_s3_campaign
-from cib_zoo.topology.network_builder import build_network
+from cib_zoo.topology.network_builder import build_network, sync_network_to_db
 from oasis.environment.env import OasisEnv
 from oasis.environment.env_action import LLMAction, ManualAction
 from oasis.social_platform.channel import Channel
@@ -272,6 +272,14 @@ async def main() -> int:
         logger.info(
             f"Network assembled: {len(organic_agents)} organic agents ({args.topology}) | "
             f"{CIBAgent.get_instance_count()} CIB bots registered."
+        )
+
+        # Synchronize user identities and initial social graph into SQLite
+        all_sim_agents = organic_agents + list(bot_agents.values())
+        sync_network_to_db(
+            agents=all_sim_agents,
+            db_path=str(db_path),
+            community_map=community_map,
         )
 
         env = OasisEnv(

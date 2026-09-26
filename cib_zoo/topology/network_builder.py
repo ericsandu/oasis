@@ -386,3 +386,87 @@ def build_network(
         raise ValueError(
             f"Unknown topology '{topology}'. Expected 'multitopic' or 'polarized'."
         )
+
+
+def sync_network_to_db(
+    agents: list[SocialAgent],
+    db_path: str,
+    community_map: dict[int, str] | None = None,
+    min_follows_per_user: int = 5,
+    max_follows_per_user: int = 8,
+    seed: int = 42,
+) -> None:
+    """Persist all agents into SQLite user table and seed intra-community homophily follow edges.
+
+    Args:
+        agents: List of all SocialAgent / CIBAgent instances participating in the simulation.
+        db_path: Path to target SQLite database.
+        community_map: Optional dict mapping agent_id -> community_name.
+        min_follows_per_user: Minimum initial followings to seed per user.
+        max_follows_per_user: Maximum initial followings to seed per user.
+        seed: Random seed for reproducible network graph generation.
+    """
+    import random
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    # 1. Populate user table
+    user_rows = []
+    for agent in agents:
+        if hasattr(agent, "to_db_user_row"):
+            user_rows.append(agent.to_db_user_row())
+        else:
+            info = agent.user_info
+            aid = getattr(agent, "social_agent_id", getattr(agent, "agent_id", 0))
+            user_rows.append((
+                aid,
+                aid,
+                getattr(info, "user_name", f"user_{aid}"),
+                getattr(info, "name", f"User {aid}"),
+                getattr(info, "description", None) or f"Profile for {aid}",
+                "2026-09-26 00:00:00",
+                0,
+                0,
+            ))
+
+    cur.executemany(
+        "INSERT OR REPLACE INTO user (user_id, agent_id, user_name, name, bio, created_at, num_followings, num_followers) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        user_rows,
+    )
+
+    # 2. Seed intra-community follow edges (Homophily)
+    if community_map:
+        rng = random.Random(seed)
+        follow_rows = []
+        communities = set(community_map.values())
+        for comm in communities:
+            comm_members = [uid for uid, c in community_map.items() if c == comm]
+            for uid in comm_members:
+                k = min(
+                    len(comm_members) - 1,
+                    rng.randint(min_follows_per_user, max_follows_per_user),
+                )
+                peers = [p for p in comm_members if p != uid]
+                if peers and k > 0:
+                    for followee in rng.sample(peers, k):
+                        follow_rows.append((uid, followee, "2026-09-26 00:00:00"))
+
+        if follow_rows:
+            cur.executemany(
+                "INSERT OR IGNORE INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)",
+                follow_rows,
+            )
+
+            # 3. Synchronize follower/following count caches in user table
+            cur.execute("""
+                UPDATE user SET 
+                    num_followings = (SELECT COUNT(*) FROM follow WHERE follower_id = user.user_id),
+                    num_followers = (SELECT COUNT(*) FROM follow WHERE followee_id = user.user_id)
+            """)
+
+    conn.commit()
+    conn.close()
+

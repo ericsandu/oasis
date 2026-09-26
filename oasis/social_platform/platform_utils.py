@@ -207,7 +207,7 @@ class PlatformUtils:
             current_time = self.sandbox_clock.get_time_step()
 
         trace_insert_query = (
-            "INSERT INTO trace (user_id, created_at, action, info) "
+            "INSERT OR IGNORE INTO trace (user_id, created_at, action, info) "
             "VALUES (?, ?, ?, ?)")
         action_info_str = json.dumps(action_info)
         self._execute_db_command(
