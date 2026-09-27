@@ -36,6 +36,7 @@ jobs:
 
       - name: Install dependencies via Poetry
         run: |
+          poetry lock --no-update
           poetry install --no-interaction
 
       - name: Run Static AST Guardrails (No sqlite3 in bot behaviors)
