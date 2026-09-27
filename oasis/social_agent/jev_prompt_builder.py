@@ -187,7 +187,9 @@ class JEVPromptBuilder:
                 recent_clean = recent_clean[7:].strip()
             lines.append(f"[RECENT ACTIONS]: {recent_clean}")
 
-        lines.append("[TASK]: Choose single reaction: [L]ike, [R]epost, [Q]uote, [C]omment, [S]kip.")
+        lines.append(
+            "[TASK]: Choose single reaction: L (Like), R (Repost), Q (Quote), C (Comment), S (Skip). Output ONLY the letter."
+        )
         lines.append("Action: ")
 
         return "\n".join(lines)

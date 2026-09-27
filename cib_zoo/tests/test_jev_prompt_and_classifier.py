@@ -167,7 +167,10 @@ class TestJEVPromptBuilder:
 
         assert "[OBSERVER]: @bob_analyst | Traits: INTJ, US | Bio: Data scientist exploring synthetic media." in suffix
         assert "[STANCE]: #ai_alignment: Supportive (+0.82)" in suffix
-        assert "[TASK]: Choose single reaction: [L]ike, [R]epost, [Q]uote, [C]omment, [S]kip." in suffix
+        assert (
+            "[TASK]: Choose single reaction: L (Like), R (Repost), Q (Quote), C (Comment), S (Skip). Output ONLY the letter."
+            in suffix
+        )
         assert suffix.endswith("Action: ")
 
     def test_agent_suffix_negative_and_zero_stance_score(self) -> None:
@@ -561,7 +564,7 @@ class TestVLLMJEVClassifierClient:
         assert endpoint == "http://mock-vllm:8000/v1/completions"
         assert payload["model"] == "Qwen/Qwen2.5-32B-Instruct"
         assert payload["prompt"] == ["Post 10 Prompt", "Post 20 Prompt"]
-        assert payload["max_tokens"] == 4
+        assert payload["max_tokens"] == 1
         assert payload["logprobs"] == 5
 
         # Assert results were parsed accurately
@@ -570,6 +573,38 @@ class TestVLLMJEVClassifierClient:
         assert results[0].confidence > 0.85
         assert results[1].action_char == "S"
         assert results[1].confidence > 0.85
+
+    @pytest.mark.asyncio
+    async def test_classify_batch_bracket_recovery_safeguard(self) -> None:
+        """Verify that when raw_text is '[' (e.g. from 1-token output), the intended action is recovered from logprobs."""
+        mock_response_json = {
+            "choices": [
+                {
+                    "index": 0,
+                    "text": "[",
+                    "logprobs": {
+                        "top_logprobs": [
+                            {"[": -0.1, "L": -1.2, "S": -2.5, "C": -4.0}
+                        ]
+                    },
+                }
+            ]
+        }
+        mock_http_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_response_json
+        mock_http_client.post.return_value = mock_resp
+
+        client = VLLMJEVClassifierClient(
+            base_url="http://mock-vllm:8000/v1",
+            client=mock_http_client,
+        )
+        items = [EvalItem(user_id=1, post_id=10, topic="tech", full_prompt="Post Prompt")]
+        results = await client.classify_batch(items)
+        assert len(results) == 1
+        assert results[0].action_char == "L"
+        assert results[0].confidence > 0.70
 
     @pytest.mark.asyncio
     async def test_classify_batch_logit_bias_formatting(self) -> None:

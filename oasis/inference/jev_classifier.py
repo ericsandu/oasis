@@ -532,7 +532,7 @@ class VLLMJEVClassifierClient:
         timeout: float = 30.0,
         client: httpx.AsyncClient | None = None,
         temperature: float = 0.0,
-        classify_max_tokens: int = 4,
+        classify_max_tokens: int = 1,
         stop: list[str] | None = None,
         auto_generate_comments: bool = False,
         max_retries: int = 2,
@@ -719,9 +719,18 @@ class VLLMJEVClassifierClient:
                             ):
                                 logits_dict[char_candidate] = float(lp)
 
-                if logits_dict:
+                # Safeguard: if raw_text was unparseable punctuation (e.g. '['),
+                # recover the intended action from the highest logit action in first_top
+                if raw_text.strip() in {"[", "]", "", ":"} and logits_dict:
+                    best_action = max(logits_dict.items(), key=lambda kv: kv[1])[0]
+                    action_char = best_action
+
+                if logits_dict and action_char in logits_dict:
                     probs = compute_softmax(logits_dict)
                     confidence = probs.get(action_char, 0.5)
+                elif logits_dict:
+                    probs = compute_softmax(logits_dict)
+                    confidence = max(probs.values()) if probs else 0.5
                 else:
                     logits_dict = {action_char: 1.0}
                     confidence = 1.0

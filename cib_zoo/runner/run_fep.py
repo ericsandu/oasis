@@ -325,7 +325,7 @@ async def main() -> int:
                     base_url=args.vllm_url,
                     model_name=args.model,
                     temperature=args.temperature,
-                    classify_max_tokens=4,
+                    classify_max_tokens=1,
                     comment_max_tokens=64,
                     comment_temperature=args.temperature,
                 )
