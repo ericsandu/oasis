@@ -23,7 +23,7 @@ for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLI
 for pkg in (
     "torch", "torch.nn", "sentence_transformers", "transformers",
     "sklearn", "sklearn.feature_extraction", "sklearn.feature_extraction.text",
-    "sklearn.metrics", "sklearn.metrics.pairwise"
+    "sklearn.metrics", "sklearn.metrics.pairwise", "tqdm",
 ):
     try:
         __import__(pkg)
