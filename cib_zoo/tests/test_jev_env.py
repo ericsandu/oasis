@@ -408,6 +408,67 @@ class TestJEVStepExecution:
         assert user_ids == {1, 2}
 
     @pytest.mark.asyncio
+    async def test_step_jev_quote_post_action(self) -> None:
+        """Verify JEV pipeline correctly executes 'Q' (Quote Post) with quote generation and dispatch."""
+        graph = AgentGraph(backend="igraph")
+        agent = DummyAgent(10, "quote_master", activity_freq=1.5)
+        graph.add_agent(agent)
+
+        mock_plat = MockPlatform()
+        env = JEVEnvironment(
+            env_or_graph=graph,
+            config=JEVExecutionConfig(
+                step_duration_seconds=300.0,
+                max_actions_per_agent=1,
+                seed=123,
+            ),
+        )
+        env.platform = mock_plat
+        env.channel = mock_plat.channel
+
+        mock_client = MockJEVClassifierClient(
+            action_mapping={(10, 501): "Q"},
+            mock_quote="This is an essential update for our community!",
+        )
+        env.classifier_client = mock_client
+
+        feeds = {
+            10: [
+                {
+                    "post_id": 501,
+                    "author_name": "source_lead",
+                    "topic": "security",
+                    "content": "Zero-day vulnerability patched in production.",
+                    "num_likes": 42,
+                    "num_shares": 10,
+                }
+            ]
+        }
+
+        result = await env.step_jev(step_index=1, agent_feeds=feeds)
+
+        assert result.num_quotes == 1
+        assert result.num_actions == 1
+        assert result.action_counts["Q"] == 1
+
+        quote_action = result.scheduled_actions[0]
+        assert quote_action.action_dict["action_char"] == "Q"
+        assert quote_action.action_dict["action_name"] == "quote_post"
+        assert quote_action.action_dict["action_type"] == ActionType.QUOTE_POST
+        assert quote_action.action_dict["post_id"] == 501
+        assert quote_action.action_dict["quote_text"] is not None
+        assert "essential update" in quote_action.action_dict["quote_text"]
+        assert quote_action.action_dict["message"][0] == 501
+        assert "essential update" in quote_action.action_dict["message"][1]
+
+        # Verify message reached channel
+        channel_queue = env.channel.receive_queue
+        assert channel_queue.qsize() == 1
+        channel_msg = await channel_queue.get()
+        assert channel_msg[1][0] == 10
+        assert channel_msg[1][2] == ActionType.QUOTE_POST
+
+    @pytest.mark.asyncio
     async def test_step_jev_inverted_prefix_byte_identity(self) -> None:
         """Verify that when 2 agents evaluate the same post, the prefix slice is byte-identical."""
         graph = AgentGraph(backend="igraph")

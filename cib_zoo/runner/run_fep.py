@@ -193,6 +193,11 @@ def parse_args() -> argparse.Namespace:
         default=0.7,
         help="Sampling temperature for LLM generation (default: 0.7).",
     )
+    parser.add_argument(
+        "--use-jev",
+        action="store_true",
+        help="Use Joint Evaluation Vectorization (JEV) engine for high-speed batched simulation.",
+    )
     return parser.parse_args()
 
 
@@ -300,6 +305,39 @@ async def main() -> int:
             database_path=str(db_path),
         )
 
+        jev_env = None
+        if args.use_jev:
+            from oasis.environment.jev_env import (
+                JEVEnvironment,
+                JEVExecutionConfig,
+            )
+
+            if is_llm_mode:
+                from oasis.inference.jev_classifier import VLLMJEVClassifierClient
+
+                jev_client = VLLMJEVClassifierClient(
+                    base_url=args.vllm_url,
+                    model_name=args.model,
+                    comment_max_tokens=64,
+                    comment_temperature=args.temperature,
+                )
+            else:
+                from oasis.inference.jev_classifier import MockJEVClassifierClient
+
+                jev_client = MockJEVClassifierClient()
+
+            jev_config = JEVExecutionConfig(
+                step_duration_seconds=300.0,
+                max_actions_per_agent=1,
+                seed=42,
+                wait_for_platform=True,
+            )
+            jev_env = JEVEnvironment(
+                env_or_graph=env,
+                config=jev_config,
+                classifier_client=jev_client,
+            )
+
         # 4. Step 0: Seed Posts according to topic mode
         seed_actions: dict = {}
         if args.topic_mode == "existing":
@@ -403,12 +441,13 @@ async def main() -> int:
             num_active = max(1, int(len(organic_agents) * args.active_ratio))
             active_organic = random.sample(organic_agents, num_active)
 
-            for org_agent in active_organic:
-                if is_llm_mode:
-                    step_actions[org_agent] = LLMAction()
-                else:
-                    # In local CPU mode: default to DO_NOTHING
-                    step_actions[org_agent] = [ManualAction(ActionType.DO_NOTHING, {})]
+            if not args.use_jev:
+                for org_agent in active_organic:
+                    if is_llm_mode:
+                        step_actions[org_agent] = LLMAction()
+                    else:
+                        # In local CPU mode: default to DO_NOTHING
+                        step_actions[org_agent] = [ManualAction(ActionType.DO_NOTHING, {})]
 
             # Generate CIB actions for active squads
             if campaign is not None:
@@ -431,7 +470,25 @@ async def main() -> int:
                         if bot_agent:
                             step_actions[bot_agent] = action_list
 
-            await env.step(step_actions)
+            if args.use_jev and jev_env is not None:
+                # 1. Execute CIB bot actions if present
+                if step_actions:
+                    await env.step(step_actions)
+
+                # 2. Evaluate active organic agents in JEV mode
+                active_org_ids = [a.social_agent_id for a in active_organic]
+                jev_res = await jev_env.step_jev(
+                    step_index=step,
+                    active_agent_ids=active_org_ids,
+                )
+                logger.info(
+                    f"[JEV] Step {step + 1} actions: L={jev_res.num_likes}, "
+                    f"R={jev_res.num_reposts}, Q={jev_res.num_quotes}, "
+                    f"C={jev_res.num_comments}, S={jev_res.num_skips} "
+                    f"({jev_res.execution_time_seconds:.3f}s)"
+                )
+            else:
+                await env.step(step_actions)
 
             # Record step exposure telemetry
             e_base_t = calculate_exposure_from_db(str(db_path), baseline_post_id)
@@ -481,6 +538,14 @@ async def main() -> int:
         total_likes = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM comment")
         total_comments = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM post WHERE quote_content IS NOT NULL AND quote_content != ''"
+        )
+        total_quotes = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM post WHERE original_post_id IS NOT NULL AND (quote_content IS NULL OR quote_content = '')"
+        )
+        total_reposts = cur.fetchone()[0]
 
         active_bot_ids = CIBAgent.get_bot_ids()
         if active_bot_ids:
@@ -545,12 +610,15 @@ async def main() -> int:
             "differential_amplification": diff_amplification,
             "ratio_amplification": ratio_amplification,
             "is_llm_mode": is_llm_mode,
+            "use_jev": bool(args.use_jev),
             "model_name": args.model if is_llm_mode else "hermetic_noop",
             "db_path": str(db_path),
             "telemetry": {
                 "total_posts": total_posts,
                 "total_likes": total_likes,
                 "total_comments": total_comments,
+                "total_quotes": total_quotes,
+                "total_reposts": total_reposts,
                 "total_bot_actions": total_bot_actions,
             },
             "community_telemetry": community_stats,

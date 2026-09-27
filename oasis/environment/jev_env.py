@@ -157,6 +157,11 @@ class JEVStepResult:
         return self.action_counts.get("R", 0)
 
     @property
+    def num_quotes(self) -> int:
+        """Total number of quote actions emitted."""
+        return self.action_counts.get("Q", 0)
+
+    @property
     def num_comments(self) -> int:
         """Total number of comment actions emitted."""
         return self.action_counts.get("C", 0)
@@ -169,7 +174,7 @@ class JEVStepResult:
     @property
     def num_actions(self) -> int:
         """Total number of active (non-skip) actions emitted."""
-        return self.num_likes + self.num_reposts + self.num_comments
+        return self.num_likes + self.num_reposts + self.num_quotes + self.num_comments
 
     def to_dict(self) -> dict[str, Any]:
         """Convert step result to dictionary."""
@@ -181,6 +186,7 @@ class JEVStepResult:
             "num_actions": self.num_actions,
             "num_likes": self.num_likes,
             "num_reposts": self.num_reposts,
+            "num_quotes": self.num_quotes,
             "num_comments": self.num_comments,
             "num_skips": self.num_skips,
             "scheduled_actions": [sa.to_dict() for sa in self.scheduled_actions],
@@ -267,9 +273,7 @@ def _create_agent_suffix(
                     mbti = str(other["mbti"])
                 if other.get("country"):
                     country = str(other["country"])
-                if other.get("user_profile") and not getattr(
-                    user_info, "description", None
-                ):
+                if other.get("user_profile"):
                     bio = str(other["user_profile"])
 
     if hasattr(agent, "mbti") and agent.mbti:
@@ -316,6 +320,11 @@ def _get_or_create_post_prefix(
             or f"user_{raw_post.get('user_id', 0)}"
         )
         content = str(raw_post.get("content") or raw_post.get("text", ""))
+        quote_content = raw_post.get("quote_content")
+        original_author = raw_post.get("original_author")
+        num_likes = int(raw_post.get("num_likes", 0) or 0)
+        num_shares = int(raw_post.get("num_shares", 0) or 0)
+
         topic = raw_post.get("topic") or raw_post.get("hashtag")
         if not topic:
             tags = re.findall(r"#(\w+)", content)
@@ -327,6 +336,10 @@ def _get_or_create_post_prefix(
             author_name=author_name,
             topic=topic,
             content=content,
+            quote_content=str(quote_content) if quote_content else None,
+            original_author=str(original_author) if original_author else None,
+            num_likes=num_likes,
+            num_shares=num_shares,
         )
         cache[post_id] = prefix
         return prefix
@@ -342,6 +355,11 @@ def _get_or_create_post_prefix(
         or f"user_{getattr(raw_post, 'user_id', 0)}"
     )
     content = str(getattr(raw_post, "content", getattr(raw_post, "text", "")))
+    quote_content = getattr(raw_post, "quote_content", None)
+    original_author = getattr(raw_post, "original_author", None)
+    num_likes = int(getattr(raw_post, "num_likes", 0) or 0)
+    num_shares = int(getattr(raw_post, "num_shares", 0) or 0)
+
     topic = getattr(raw_post, "topic", None)
     if not topic:
         tags = re.findall(r"#(\w+)", content)
@@ -353,6 +371,10 @@ def _get_or_create_post_prefix(
         author_name=author_name,
         topic=topic,
         content=content,
+        quote_content=str(quote_content) if quote_content else None,
+        original_author=str(original_author) if original_author else None,
+        num_likes=num_likes,
+        num_shares=num_shares,
     )
     cache[post_id] = prefix
     return prefix
@@ -650,7 +672,7 @@ class JEVEnvironment(OasisEnv):
             return JEVStepResult(
                 step_index=step_index,
                 total_evaluations=0,
-                action_counts={"L": 0, "R": 0, "C": 0, "S": 0},
+                action_counts={"L": 0, "R": 0, "Q": 0, "C": 0, "S": 0},
                 execution_time_seconds=exec_time,
                 scheduled_actions=[],
             )
@@ -707,7 +729,7 @@ class JEVEnvironment(OasisEnv):
             return JEVStepResult(
                 step_index=step_index,
                 total_evaluations=0,
-                action_counts={"L": 0, "R": 0, "C": 0, "S": 0},
+                action_counts={"L": 0, "R": 0, "Q": 0, "C": 0, "S": 0},
                 execution_time_seconds=exec_time,
                 scheduled_actions=[],
             )
@@ -734,8 +756,9 @@ class JEVEnvironment(OasisEnv):
             downgrade_to_skip=self.config.downgrade_to_skip,
         )
 
-        # Stage f: Conditional comment generation fallback for surviving 'C' actions
+        # Stage f: Conditional comment and quote generation fallback for surviving 'C' and 'Q' actions
         comment_requests: list[tuple[int, str, str]] = []
+        quote_requests: list[tuple[int, str, str]] = []
         for idx, res in enumerate(resolved_results):
             if res.action_char == "C" and not res.comment_text:
                 ctx = item_context.get((res.user_id, res.post_id))
@@ -745,6 +768,14 @@ class JEVEnvironment(OasisEnv):
                         post_prefix, agent_suffix
                     )
                     comment_requests.append((idx, prompt, post_prefix.content))
+            elif res.action_char == "Q" and not res.quote_text:
+                ctx = item_context.get((res.user_id, res.post_id))
+                if ctx:
+                    post_prefix, agent_suffix, _, _ = ctx
+                    prompt = JEVPromptBuilder.assemble_eval_prompt(
+                        post_prefix, agent_suffix
+                    )
+                    quote_requests.append((idx, prompt, post_prefix.content))
 
         if comment_requests:
             req_pairs = [(r[1], r[2]) for r in comment_requests]
@@ -752,13 +783,31 @@ class JEVEnvironment(OasisEnv):
                 generated_texts = (
                     await self.classifier_client.generate_comments_batch(req_pairs)
                 )
-            else:
+            elif hasattr(self.classifier_client, "generate_comment"):
                 generated_texts = [
                     await self.classifier_client.generate_comment(p, c)
                     for p, c in req_pairs
                 ]
+            else:
+                generated_texts = ["Interesting post."] * len(req_pairs)
             for (idx, _, _), comment_text in zip(comment_requests, generated_texts):
                 resolved_results[idx].comment_text = comment_text
+
+        if quote_requests:
+            q_req_pairs = [(r[1], r[2]) for r in quote_requests]
+            if hasattr(self.classifier_client, "generate_quotes_batch"):
+                generated_quotes = (
+                    await self.classifier_client.generate_quotes_batch(q_req_pairs)
+                )
+            elif hasattr(self.classifier_client, "generate_quote"):
+                generated_quotes = [
+                    await self.classifier_client.generate_quote(p, c)
+                    for p, c in q_req_pairs
+                ]
+            else:
+                generated_quotes = ["Thought-provoking post."] * len(q_req_pairs)
+            for (idx, _, _), quote_text in zip(quote_requests, generated_quotes):
+                resolved_results[idx].quote_text = quote_text
 
         # Stage h & i: Format action payloads and schedule continuous arrivals
         agent_actions_to_schedule: list[tuple[int, dict[str, Any], float]] = []
@@ -777,6 +826,10 @@ class JEVEnvironment(OasisEnv):
                 action_type = ActionType.REPOST
                 message = res.post_id
                 action_name = "repost"
+            elif res.action_char == "Q":
+                action_type = ActionType.QUOTE_POST
+                message = (res.post_id, res.quote_text or "")
+                action_name = "quote_post"
             elif res.action_char == "C":
                 action_type = ActionType.CREATE_COMMENT
                 message = (res.post_id, res.comment_text or "")
@@ -793,6 +846,7 @@ class JEVEnvironment(OasisEnv):
                 "post_id": res.post_id,
                 "message": message,
                 "comment_text": res.comment_text,
+                "quote_text": res.quote_text,
                 "confidence": res.confidence,
                 "topic": topic,
                 "raw_post": raw_post,
@@ -860,7 +914,7 @@ class JEVEnvironment(OasisEnv):
             self.platform.sandbox_clock.time_step += 1
 
         # Stage k: Compile action distribution and return JEVStepResult
-        action_counts = {"L": 0, "R": 0, "C": 0, "S": 0}
+        action_counts = {"L": 0, "R": 0, "Q": 0, "C": 0, "S": 0}
         for sa in scheduled_actions:
             c = sa.action_dict.get("action_char", "S")
             action_counts[c] = action_counts.get(c, 0) + 1

@@ -78,10 +78,11 @@ class ClassificationResult:
     Attributes:
         user_id: Evaluating agent's integer ID.
         post_id: Evaluated post's integer ID.
-        action_char: Predicted interaction choice ('L', 'R', 'C', 'S').
+        action_char: Predicted interaction choice ('L', 'R', 'Q', 'C', 'S').
         confidence: Probability score in [0.0, 1.0] for the chosen action.
-        logits: Logit / probability distribution across {'L', 'R', 'C', 'S'}.
+        logits: Logit / probability distribution across {'L', 'R', 'Q', 'C', 'S'}.
         comment_text: Generated comment text if action_char == 'C' and comment worker ran.
+        quote_text: Generated quote commentary text if action_char == 'Q' and quote worker ran.
     """
 
     user_id: int
@@ -90,6 +91,7 @@ class ClassificationResult:
     confidence: float
     logits: dict[str, float] = field(default_factory=dict)
     comment_text: str | None = None
+    quote_text: str | None = None
 
 
 @runtime_checkable
@@ -140,6 +142,36 @@ class JEVClassifierClient(Protocol):
 
         Returns:
             List of generated comment strings.
+        """
+        ...
+
+    async def generate_quote(
+        self,
+        user_prompt: str,
+        post_content: str,
+    ) -> str:
+        """Generate a realistic quote commentary string for an agent quote-tweeting a post.
+
+        Args:
+            user_prompt: Assembled user persona prompt or context.
+            post_content: Post text being quoted.
+
+        Returns:
+            Generated quote commentary text.
+        """
+        ...
+
+    async def generate_quotes_batch(
+        self,
+        quote_requests: list[tuple[str, str]],
+    ) -> list[str]:
+        """Batch generate quote commentaries for multiple (user_prompt, post_content) pairs.
+
+        Args:
+            quote_requests: List of (user_prompt, post_content) tuples.
+
+        Returns:
+            List of generated quote commentary strings.
         """
         ...
 
@@ -234,6 +266,7 @@ def resolve_intra_feed_budget(
                             confidence=skip_confidence,
                             logits=dict(res.logits),
                             comment_text=None,
+                            quote_text=None,
                         )
                     # If not downgrade_to_skip, excess item is dropped from resolved_map
 
@@ -275,21 +308,24 @@ class MockJEVClassifierClient:
         action_mapping: dict[tuple[int, int], str] | None = None,
         default_action: str | None = None,
         mock_comment: str = "Interesting perspective on this topic.",
+        mock_quote: str = "Thought-provoking perspective on this topic.",
         default_confidence: float = 0.95,
         seed: int = 42,
     ) -> None:
         """Initializes the mock classifier.
 
         Args:
-            action_mapping: Mapping of (user_id, post_id) -> action character ('L', 'R', 'C', 'S').
+            action_mapping: Mapping of (user_id, post_id) -> action character ('L', 'R', 'Q', 'C', 'S').
             default_action: Global fallback action if pair not in action_mapping.
             mock_comment: Default comment text returned for comment generation requests.
+            mock_quote: Default quote text returned for quote commentary requests.
             default_confidence: Default confidence assigned to deterministic choices.
             seed: Seed value used for deterministic fallback generation.
         """
         self.action_mapping = dict(action_mapping or {})
         self.default_action = default_action
         self.mock_comment = mock_comment
+        self.mock_quote = mock_quote
         self.default_confidence = default_confidence
         self.seed = seed
 
@@ -307,7 +343,7 @@ class MockJEVClassifierClient:
         # 1. Explicit mapping override
         if pair in self.action_mapping:
             char = self.action_mapping[pair]
-            logits = {"L": 0.05, "R": 0.05, "C": 0.05, "S": 0.05}
+            logits = {"L": 0.05, "R": 0.05, "Q": 0.05, "C": 0.05, "S": 0.05}
             logits[char] = 4.0
             probs = compute_softmax(logits)
             return char, probs[char], probs
@@ -315,7 +351,7 @@ class MockJEVClassifierClient:
         # 2. Fixed default action override
         if self.default_action is not None:
             char = self.default_action
-            logits = {"L": 0.05, "R": 0.05, "C": 0.05, "S": 0.05}
+            logits = {"L": 0.05, "R": 0.05, "Q": 0.05, "C": 0.05, "S": 0.05}
             logits[char] = 4.0
             probs = compute_softmax(logits)
             return char, probs[char], probs
@@ -346,34 +382,40 @@ class MockJEVClassifierClient:
         )
 
         if stance_score > 0.3 or "Supportive" in prompt:
-            # Positive stance: strongly biased to Like, occasionally Repost or Comment
+            # Positive stance: strongly biased to Like, occasionally Quote, Repost or Comment
             if h < 10:
                 char = "C"
-            elif h < 30:
+            elif h < 20:
+                char = "Q"
+            elif h < 35:
                 char = "R"
             elif h < 90:
                 char = "L"
             else:
                 char = "S"
-            base_logits = {"L": 3.0, "R": 1.5, "C": 1.2, "S": -0.5}
+            base_logits = {"L": 3.0, "R": 1.5, "Q": 1.5, "C": 1.2, "S": -0.5}
         elif stance_score < -0.3 or "Hostile" in prompt or "Skeptical" in prompt:
-            # Negative stance: biased to Skip, occasionally critical Comment
-            if h < 15:
+            # Negative stance: biased to Skip, occasionally critical Comment or Quote
+            if h < 10:
                 char = "C"
+            elif h < 20:
+                char = "Q"
             else:
                 char = "S"
-            base_logits = {"L": -1.0, "R": -1.5, "C": 1.0, "S": 3.5}
+            base_logits = {"L": -1.0, "R": -1.5, "Q": 1.2, "C": 1.0, "S": 3.5}
         else:
             # Neutral stance
-            if h < 40:
+            if h < 35:
                 char = "L"
-            elif h < 50:
+            elif h < 45:
                 char = "R"
-            elif h < 60:
+            elif h < 55:
+                char = "Q"
+            elif h < 65:
                 char = "C"
             else:
                 char = "S"
-            base_logits = {"L": 1.0, "R": 0.8, "C": 0.8, "S": 1.5}
+            base_logits = {"L": 1.0, "R": 0.8, "Q": 0.8, "C": 0.8, "S": 1.5}
 
         # Boost the chosen action logit
         base_logits[char] += 2.0
@@ -391,8 +433,13 @@ class MockJEVClassifierClient:
         for item in items:
             char, conf, logits = self._determine_action(item)
             comment_text = None
+            quote_text = None
             if generate_comments and char == "C":
                 comment_text = await self.generate_comment(
+                    item.full_prompt, item.post_content
+                )
+            elif generate_comments and char == "Q":
+                quote_text = await self.generate_quote(
                     item.full_prompt, item.post_content
                 )
 
@@ -404,6 +451,7 @@ class MockJEVClassifierClient:
                     confidence=conf,
                     logits=logits,
                     comment_text=comment_text,
+                    quote_text=quote_text,
                 )
             )
 
@@ -433,6 +481,29 @@ class MockJEVClassifierClient:
         return [
             await self.generate_comment(prompt, content)
             for prompt, content in comment_requests
+        ]
+
+    async def generate_quote(
+        self,
+        user_prompt: str,
+        post_content: str,
+    ) -> str:
+        """Returns deterministic mock quote commentary string."""
+        if post_content:
+            clean_content = post_content.strip()
+            if len(clean_content) > 30:
+                clean_content = clean_content[:27] + "..."
+            return f"Quoting '{clean_content}': {self.mock_quote}"
+        return self.mock_quote
+
+    async def generate_quotes_batch(
+        self,
+        quote_requests: list[tuple[str, str]],
+    ) -> list[str]:
+        """Batch generates mock quote commentaries."""
+        return [
+            await self.generate_quote(prompt, content)
+            for prompt, content in quote_requests
         ]
 
     def resolve_budget(
@@ -664,7 +735,7 @@ class VLLMJEVClassifierClient:
                     )
                 )
 
-        # Trigger secondary comment worker if requested
+        # Trigger secondary comment / quote worker if requested
         if generate_comments or self.auto_generate_comments:
             comment_indices = [
                 i for i, r in enumerate(results) if r.action_char == "C"
@@ -677,6 +748,18 @@ class VLLMJEVClassifierClient:
                 comments = await self.generate_comments_batch(requests)
                 for res_idx, comment in zip(comment_indices, comments):
                     results[res_idx].comment_text = comment
+
+            quote_indices = [
+                i for i, r in enumerate(results) if r.action_char == "Q"
+            ]
+            if quote_indices:
+                q_requests = [
+                    (items[i].full_prompt, items[i].post_content)
+                    for i in quote_indices
+                ]
+                quotes = await self.generate_quotes_batch(q_requests)
+                for res_idx, quote in zip(quote_indices, quotes):
+                    results[res_idx].quote_text = quote
 
         return results
 
@@ -738,6 +821,18 @@ class VLLMJEVClassifierClient:
                 comments = await self.generate_comments_batch(requests)
                 for res_idx, comment in zip(comment_indices, comments):
                     results[res_idx].comment_text = comment
+
+            quote_indices = [
+                i for i, r in enumerate(results) if r.action_char == "Q"
+            ]
+            if quote_indices:
+                q_requests = [
+                    (items[i].full_prompt, items[i].post_content)
+                    for i in quote_indices
+                ]
+                quotes = await self.generate_quotes_batch(q_requests)
+                for res_idx, quote in zip(quote_indices, quotes):
+                    results[res_idx].quote_text = quote
 
         return list(results)
 
@@ -803,6 +898,71 @@ class VLLMJEVClassifierClient:
         tasks = [
             self.generate_comment(prompt, content)
             for prompt, content in comment_requests
+        ]
+        return await asyncio.gather(*tasks)
+
+    async def generate_quote(
+        self,
+        user_prompt: str,
+        post_content: str,
+    ) -> str:
+        """Generates a realistic social media quote commentary reacting to a post."""
+        async with self._comment_semaphore:
+            endpoint = f"{self.base_url}/chat/completions"
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are simulating an authentic social media user quote-tweeting a post. "
+                        "Write a single concise quote commentary (1-2 sentences) sharing your perspective. "
+                        "Output ONLY the quote commentary text without quotes or explanation."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"{user_prompt}\n\n"
+                        f'Target Post Content: "{post_content}"\n\n'
+                        "Quote Commentary:"
+                    ),
+                },
+            ]
+
+            payload = {
+                "model": self.model_name,
+                "messages": messages,
+                "max_tokens": self.comment_max_tokens,
+                "temperature": self.comment_temperature,
+            }
+
+            for attempt in range(self.max_retries + 1):
+                try:
+                    resp = await self._client.post(endpoint, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        raw_quote = (
+                            data.get("choices", [{}])[0]
+                            .get("message", {})
+                            .get("content", "")
+                        )
+                        clean_quote = raw_quote.strip().strip('"\'')
+                        return clean_quote if clean_quote else "Interesting post, sharing with my followers."
+                except Exception as e:  # noqa: BLE001
+                    if attempt == self.max_retries:
+                        logger.warning("Quote generation error: %s", e)
+                        return "Interesting post, sharing with my followers."
+                    await asyncio.sleep(0.1 * (2**attempt))
+
+            return "Interesting post, sharing with my followers."
+
+    async def generate_quotes_batch(
+        self,
+        quote_requests: list[tuple[str, str]],
+    ) -> list[str]:
+        """Concurrently generates quote commentaries for multiple requests."""
+        tasks = [
+            self.generate_quote(prompt, content)
+            for prompt, content in quote_requests
         ]
         return await asyncio.gather(*tasks)
 

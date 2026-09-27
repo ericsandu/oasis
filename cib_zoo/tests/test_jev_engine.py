@@ -319,7 +319,7 @@ class TestJEVInvertedPromptPrefixIdentity:
         # confirming 70-90% KV-cache reuse capability when batched across observers.
         for prompt in assembled_prompts:
             ratio = len(post_prefix_bytes) / len(prompt.encode("utf-8"))
-            assert 0.35 <= ratio <= 0.85, f"Prefix ratio {ratio:.2f} outside expected range"
+            assert 0.30 <= ratio <= 0.85, f"Prefix ratio {ratio:.2f} outside expected range"
 
     def test_post_prefix_normalization_invariance(self) -> None:
         """Verify that handle normalization (@alice vs alice, #topic vs topic) guarantees byte identity."""

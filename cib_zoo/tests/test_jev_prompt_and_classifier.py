@@ -104,6 +104,23 @@ class TestJEVPromptBuilder:
         )
         assert JEVPromptBuilder.build_inverted_prefix(post) == JEVPromptBuilder.build_post_prefix(post)
 
+    def test_post_prefix_with_quote_and_metrics(self) -> None:
+        """Verify post prefix formatting when post contains quote commentary and engagement counts."""
+        quote_post = PostPrefixData(
+            post_id=45,
+            author_name="reviewer_01",
+            topic="safety",
+            content="Original AI safety framework.",
+            quote_content="Essential read for all researchers.",
+            original_author="original_author_42",
+            num_likes=12,
+            num_shares=3,
+        )
+        prefix = JEVPromptBuilder.build_post_prefix(quote_post)
+        assert "[POST ID: 45] Author: @reviewer_01 | Topic: #safety | Likes: 12 | Reposts: 3\n" in prefix
+        assert 'Quote Commentary: "Essential read for all researchers."\n' in prefix
+        assert '[Quoted Post from @original_author_42]: "Original AI safety framework."\n\n' in prefix
+
     def test_agent_suffix_formatting_and_stance(self) -> None:
         """Verify agent suffix formatting including persona, traits, and formatted stance score."""
         agent = AgentSuffixData(
@@ -120,7 +137,7 @@ class TestJEVPromptBuilder:
 
         assert "[OBSERVER]: @bob_analyst | Traits: INTJ, US | Bio: Data scientist exploring synthetic media." in suffix
         assert "[STANCE]: #ai_alignment: Supportive (+0.82)" in suffix
-        assert "[TASK]: Choose single reaction: [L]ike, [R]epost, [C]omment, [S]kip." in suffix
+        assert "[TASK]: Choose single reaction: [L]ike, [R]epost, [Q]uote, [C]omment, [S]kip." in suffix
         assert suffix.endswith("Action: ")
 
     def test_agent_suffix_negative_and_zero_stance_score(self) -> None:
@@ -216,21 +233,28 @@ class TestJEVPromptBuilder:
         [
             ("L", "L"),
             ("R", "R"),
+            ("Q", "Q"),
             ("C", "C"),
             ("S", "S"),
             (" l ", "L"),
             (" r\n", "R"),
+            (" q ", "Q"),
             ("Like", "L"),
             ("LIKE", "L"),
             ("Repost", "R"),
+            ("Quote", "Q"),
+            ("QUOTE", "Q"),
             ("Comment", "C"),
             ("Skip", "S"),
             ("[L]", "L"),
             ("[R]", "R"),
+            ("[Q]", "Q"),
             ("[C]", "C"),
             ("[S]", "S"),
             ("Action: L", "L"),
             ("Action: [R]", "R"),
+            ("Action: [Q]", "Q"),
+            ("Action: Quote", "Q"),
             ("Action: Comment", "C"),
             ("[Action]: S", "S"),
             ("I would choose [L] because I like it", "L"),
@@ -407,6 +431,37 @@ class TestMockJEVClassifierClient:
         comments = await client.generate_comments_batch(requests)
         assert len(comments) == 2
         assert all("Nice post!" in c for c in comments)
+
+    @pytest.mark.asyncio
+    async def test_conditional_quote_generation(self) -> None:
+        """Verify quote fallback worker triggers when 'Q' is emitted and generate_comments=True."""
+        client = MockJEVClassifierClient(
+            action_mapping={(1, 60): "Q", (1, 61): "S"},
+            mock_quote="Great breakthrough in LLM optimization.",
+        )
+
+        items = [
+            EvalItem(user_id=1, post_id=60, topic="ai", full_prompt="Prompt Q", post_content="Paper on JEV"),
+            EvalItem(user_id=1, post_id=61, topic="ai", full_prompt="Prompt S", post_content="Paper on caching"),
+        ]
+
+        results = await client.classify_batch(items, generate_comments=True)
+        assert results[0].action_char == "Q"
+        assert results[0].quote_text is not None
+        assert "Paper on JEV" in results[0].quote_text or "Great breakthrough" in results[0].quote_text
+
+        # Item 1 was Skip: quote_text should remain None
+        assert results[1].action_char == "S"
+        assert results[1].quote_text is None
+
+    @pytest.mark.asyncio
+    async def test_batch_quote_generation(self) -> None:
+        """Verify generate_quotes_batch generates quotes for multiple requests."""
+        client = MockJEVClassifierClient(mock_quote="Compelling quote!")
+        requests = [("user_ctx1", "post content 1"), ("user_ctx2", "post content 2")]
+        quotes = await client.generate_quotes_batch(requests)
+        assert len(quotes) == 2
+        assert all("Compelling quote!" in q for q in quotes)
 
 
 # ==============================================================================

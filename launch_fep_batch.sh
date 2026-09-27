@@ -195,6 +195,14 @@ else
     echo "Notice: Proceeding without live vLLM server (using local hermetic execution)."
 fi
 
+USE_JEV_FLAG=""
+if [ "${USE_JEV:-1}" = "1" ]; then
+    USE_JEV_FLAG="--use-jev"
+    echo "✓ JEV Acceleration Mode: ENABLED (Joint Evaluation Vectorization with 1-token logit biasing)"
+else
+    echo "Notice: JEV Acceleration Mode: DISABLED (Using legacy CAMEL multi-turn agent execution)"
+fi
+
 # ==============================================================================
 # 6. Execute the 10-Run CIB Experiment Matrix
 # ==============================================================================
@@ -247,6 +255,7 @@ for run_spec in "${RUNS[@]}"; do
         --max-steps "${MAX_STEPS}" \
         --db-path "${DB_PATH}" \
         --output-json "${JSON_PATH}" \
+        ${USE_JEV_FLAG} \
         ${VLLM_FLAG}
 
     RUN_END_TIME=$(date +%s)

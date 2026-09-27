@@ -41,12 +41,20 @@ class PostPrefixData:
         author_name: Handle or username of the post creator (e.g. 'alice' or '@alice').
         topic: Topic category or hashtag (e.g. 'tech' or '#tech').
         content: Textual content body of the post.
+        quote_content: Optional commentary text if this post is a quote post.
+        original_author: Optional handle of the original author being quoted.
+        num_likes: Count of likes on the post for social proof signals.
+        num_shares: Count of reposts/quotes on the post for social proof signals.
     """
 
     post_id: int
     author_name: str
     topic: str
     content: str
+    quote_content: str | None = None
+    original_author: str | None = None
+    num_likes: int = 0
+    num_shares: int = 0
 
 
 @dataclass(frozen=True)
@@ -83,7 +91,7 @@ class JEVPromptBuilder:
     to maximize RadixAttention KV-cache prefix hits across multiple agents evaluating identical posts.
     """
 
-    VALID_ACTIONS: Sequence[str] = ("L", "R", "C", "S")
+    VALID_ACTIONS: Sequence[str] = ("L", "R", "Q", "C", "S")
 
     @staticmethod
     def build_post_prefix(post: PostPrefixData) -> str:
@@ -102,8 +110,21 @@ class JEVPromptBuilder:
         topic_clean = post.topic.strip().lstrip("#")
         content_clean = post.content.strip()
 
+        metrics_part = ""
+        if post.num_likes > 0 or post.num_shares > 0:
+            metrics_part = f" | Likes: {post.num_likes} | Reposts: {post.num_shares}"
+
+        if post.quote_content and post.quote_content.strip():
+            quote_clean = post.quote_content.strip()
+            orig_author = (post.original_author or "user").strip().lstrip("@")
+            return (
+                f"[POST ID: {post.post_id}] Author: @{author_clean} | Topic: #{topic_clean}{metrics_part}\n"
+                f'Quote Commentary: "{quote_clean}"\n'
+                f'[Quoted Post from @{orig_author}]: "{content_clean}"\n\n'
+            )
+
         return (
-            f"[POST ID: {post.post_id}] Author: @{author_clean} | Topic: #{topic_clean}\n"
+            f"[POST ID: {post.post_id}] Author: @{author_clean} | Topic: #{topic_clean}{metrics_part}\n"
             f'Content: "{content_clean}"\n\n'
         )
 
@@ -151,7 +172,7 @@ class JEVPromptBuilder:
                 recent_clean = recent_clean[7:].strip()
             lines.append(f"[RECENT ACTIONS]: {recent_clean}")
 
-        lines.append("[TASK]: Choose single reaction: [L]ike, [R]epost, [C]omment, [S]kip.")
+        lines.append("[TASK]: Choose single reaction: [L]ike, [R]epost, [Q]uote, [C]omment, [S]kip.")
         lines.append("Action: ")
 
         return "\n".join(lines)
@@ -207,8 +228,8 @@ class JEVPromptBuilder:
         if not text:
             return "S"
 
-        # Check bracketed token: [L], [R], [C], [S]
-        bracket_match = re.search(r"\[([LRCS])\]", text, re.IGNORECASE)
+        # Check bracketed token: [L], [R], [Q], [C], [S]
+        bracket_match = re.search(r"\[([LRQCS])\]", text, re.IGNORECASE)
         if bracket_match:
             return bracket_match.group(1).upper()
 
@@ -221,6 +242,8 @@ class JEVPromptBuilder:
         upper_text = text.upper()
         if "LIKE" in upper_text:
             return "L"
+        if "QUOTE" in upper_text:
+            return "Q"
         if "REPOST" in upper_text:
             return "R"
         if "COMMENT" in upper_text:
@@ -229,7 +252,7 @@ class JEVPromptBuilder:
             return "S"
 
         # Check word boundary regex for isolated action characters
-        isolated_match = re.search(r"\b([LRCS])\b", upper_text)
+        isolated_match = re.search(r"\b([LRQCS])\b", upper_text)
         if isolated_match:
             return isolated_match.group(1).upper()
 
