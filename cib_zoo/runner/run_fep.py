@@ -328,6 +328,7 @@ async def main() -> int:
                     classify_max_tokens=1,
                     comment_max_tokens=64,
                     comment_temperature=args.temperature,
+                    auto_discover_token_ids=True,
                 )
             else:
                 from oasis.inference.jev_classifier import MockJEVClassifierClient

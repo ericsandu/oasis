@@ -236,17 +236,20 @@ class JEVPromptBuilder:
 
         text = raw_response.strip()
 
-        # Handle 'Action: ...' or '[Action]: ...'
+        # Handle 'Action: ...' or '[Action]: ...' or 'Reaction: ...'
         if ":" in text:
             prefix_part, after_colon = text.split(":", 1)
-            if "action" in prefix_part.lower():
+            if any(
+                k in prefix_part.lower()
+                for k in ("action", "reaction", "decision", "choice", "response")
+            ):
                 text = after_colon.strip()
 
         if not text:
             return "S"
 
-        # Check bracketed token: [L], [R], [Q], [C], [S]
-        bracket_match = re.search(r"\[([LRQCS])\]", text, re.IGNORECASE)
+        # Check bracketed or parenthesized token: [L], (L), [R], (R), etc.
+        bracket_match = re.search(r"[\[\(]([LRQCS])[\]\)]", text, re.IGNORECASE)
         if bracket_match:
             return bracket_match.group(1).upper()
 

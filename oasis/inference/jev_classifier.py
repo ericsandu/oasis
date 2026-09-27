@@ -539,6 +539,7 @@ class VLLMJEVClassifierClient:
         comment_temperature: float = 0.7,
         comment_max_tokens: int = 64,
         max_concurrent_comments: int = 8,
+        auto_discover_token_ids: bool = False,
     ) -> None:
         """Initializes the vLLM classifier client.
 
@@ -557,6 +558,7 @@ class VLLMJEVClassifierClient:
             comment_temperature: Temperature for secondary comment generation.
             comment_max_tokens: Maximum tokens for secondary comment generation.
             max_concurrent_comments: Semaphore concurrency limit for secondary comment requests.
+            auto_discover_token_ids: If True, dynamically queries /tokenize to resolve action token IDs.
         """
         raw_url = base_url or DEFAULT_VLLM_URL
         self.base_url = raw_url.rstrip("/")
@@ -572,6 +574,8 @@ class VLLMJEVClassifierClient:
         self.comment_temperature = comment_temperature
         self.comment_max_tokens = comment_max_tokens
         self._comment_semaphore = asyncio.Semaphore(max_concurrent_comments)
+        self.auto_discover_token_ids = auto_discover_token_ids
+        self._token_bias_initialized = False
 
         self._own_client = client is None
         self._client = client or httpx.AsyncClient(
@@ -594,6 +598,74 @@ class VLLMJEVClassifierClient:
         exc_tb: object,
     ) -> None:
         await self.aclose()
+
+    async def _ensure_token_bias(self) -> None:
+        """Dynamically discovers token IDs from vLLM /tokenize endpoint if available,
+        or configures default cl100k/Qwen logit biases for 1-token action classification."""
+        if self._token_bias_initialized:
+            return
+
+        self._token_bias_initialized = True
+
+        if self.raw_logit_bias:
+            return
+
+        discovered_ids: dict[int, str] = {}
+        candidate_strings = [
+            "L", "R", "Q", "C", "S",
+            " L", " R", " Q", " C", " S",
+            "l", "r", "q", "c", "s",
+        ]
+
+        # 1. Attempt dynamic query to vLLM /tokenize endpoint
+        base_clean = self.base_url.rstrip("/")
+        tokenize_url = (
+            f"{base_clean[:-3]}/tokenize"
+            if base_clean.endswith("/v1")
+            else f"{base_clean}/tokenize"
+        )
+
+        try:
+            for s in candidate_strings:
+                resp = await self._client.post(
+                    tokenize_url,
+                    json={"model": self.model_name, "prompt": s},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    toks = data.get("tokens", [])
+                    if len(toks) == 1:
+                        char_key = s.strip().upper()
+                        discovered_ids[int(toks[0])] = char_key
+                        if char_key not in self.token_id_map:
+                            self.token_id_map[char_key] = int(toks[0])
+            if discovered_ids:
+                logger.info(
+                    "✓ Discovered %d action token IDs from vLLM /tokenize: %s",
+                    len(discovered_ids),
+                    discovered_ids,
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Failed to query vLLM /tokenize: %s", e)
+
+        # 2. Fallback to standard cl100k/Qwen token IDs if dynamic discovery failed
+        if not discovered_ids:
+            fallback_map = {
+                43: "L", 49: "R", 48: "Q", 34: "C", 50: "S",
+                445: "L", 432: "R", 1229: "Q", 356: "C", 328: "S",
+                75: "L", 81: "R", 80: "Q", 66: "C", 82: "S",
+            }
+            discovered_ids = fallback_map
+            for tid, act in fallback_map.items():
+                if act not in self.token_id_map:
+                    self.token_id_map[act] = tid
+            logger.info(
+                "Configured default cl100k/Qwen token IDs for logit biasing: %s",
+                self.token_id_map,
+            )
+
+        # Set uniform +50.0 positive logit bias across all valid action tokens
+        self.raw_logit_bias = {tid: 50.0 for tid in discovered_ids}
 
     def _format_logit_bias_payload(self) -> dict[str, float] | None:
         """Formats logit bias dictionary into API-compliant string token ID mapping."""
@@ -623,6 +695,9 @@ class VLLMJEVClassifierClient:
         if not items:
             return []
 
+        if self.auto_discover_token_ids and not self._token_bias_initialized:
+            await self._ensure_token_bias()
+
         prompts = [item.full_prompt for item in items]
         endpoint = f"{self.base_url}/completions"
 
@@ -633,7 +708,7 @@ class VLLMJEVClassifierClient:
             "temperature": self.temperature,
             "logprobs": 5,
         }
-        if self.stop:
+        if self.stop and self.classify_max_tokens > 1:
             payload["stop"] = self.stop
 
         formatted_bias = self._format_logit_bias_payload()
@@ -705,7 +780,7 @@ class VLLMJEVClassifierClient:
                         first_top = top_logprobs_list[0] or {}
                         for tok_str, lp in first_top.items():
                             clean_tok = tok_str.strip()
-                            if clean_tok in {"[", "]", "", ":", "-", ">"}:
+                            if clean_tok in {"[", "]", "", ":", "-", ">", "(", ")", "*"}:
                                 continue
                             char_candidate = (
                                 JEVPromptBuilder.parse_action_char(tok_str)
@@ -719,9 +794,9 @@ class VLLMJEVClassifierClient:
                             ):
                                 logits_dict[char_candidate] = float(lp)
 
-                # Safeguard: if raw_text was unparseable punctuation (e.g. '['),
+                # Safeguard: if raw_text was unparseable punctuation (e.g. '[' or '('),
                 # recover the intended action from the highest logit action in first_top
-                if raw_text.strip() in {"[", "]", "", ":"} and logits_dict:
+                if raw_text.strip() in {"[", "]", "", ":", "(", ")", "*", "-"} and logits_dict:
                     best_action = max(logits_dict.items(), key=lambda kv: kv[1])[0]
                     action_char = best_action
 
@@ -754,6 +829,20 @@ class VLLMJEVClassifierClient:
                         logits={"S": 1.0},
                     )
                 )
+
+        if logger.isEnabledFor(logging.INFO) and choices:
+            sample_texts = [
+                choices[i].get("text", "")
+                for i in range(min(5, len(choices)))
+            ]
+            action_dist = defaultdict(int)
+            for r in results:
+                action_dist[r.action_char] += 1
+            logger.info(
+                f"[JEV vLLM Batch] Evaluated {len(items)} items | "
+                f"Raw outputs sample: {sample_texts!r} | "
+                f"Actions: {dict(action_dist)}"
+            )
 
         # Trigger secondary comment / quote worker if requested
         if generate_comments or self.auto_generate_comments:

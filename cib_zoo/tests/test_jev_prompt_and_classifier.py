@@ -637,6 +637,49 @@ class TestVLLMJEVClassifierClient:
         assert payload["logit_bias"] == {"44": 100.0, "55": 100.0, "66": 100.0, "77": 100.0}
 
     @pytest.mark.asyncio
+    async def test_classify_batch_auto_discover_token_ids(self) -> None:
+        """Verify client queries /tokenize endpoint to discover action token IDs and applies logit bias."""
+        mock_http_client = AsyncMock()
+
+        def mock_post_handler(url: str, **kwargs: Any) -> MagicMock:
+            resp = MagicMock()
+            resp.status_code = 200
+            if "tokenize" in url:
+                payload = kwargs.get("json", {})
+                prompt_str = payload.get("prompt", "")
+                token_map = {"L": [43], "R": [49], "Q": [48], "C": [34], "S": [50]}
+                clean_char = prompt_str.strip().upper()
+                resp.json.return_value = {"tokens": token_map.get(clean_char, [999])}
+            else:
+                resp.json.return_value = {
+                    "choices": [{"text": "L", "logprobs": {}}]
+                }
+            return resp
+
+        mock_http_client.post.side_effect = mock_post_handler
+
+        client = VLLMJEVClassifierClient(
+            base_url="http://mock-vllm:8000/v1",
+            auto_discover_token_ids=True,
+            client=mock_http_client,
+        )
+
+        items = [EvalItem(user_id=1, post_id=10, topic="tech", full_prompt="Post Prompt")]
+        results = await client.classify_batch(items)
+
+        assert len(results) == 1
+        assert results[0].action_char == "L"
+        # Verify logit bias was constructed and sent in completions call
+        completions_calls = [
+            c for c in mock_http_client.post.call_args_list
+            if "completions" in c[0][0] and "tokenize" not in c[0][0]
+        ]
+        assert len(completions_calls) == 1
+        c_payload = completions_calls[0][1]["json"]
+        assert "logit_bias" in c_payload
+        assert c_payload["logit_bias"]["43"] == 50.0
+
+    @pytest.mark.asyncio
     async def test_fallback_to_chat_completions_on_404(self) -> None:
         """Verify client falls back to /chat/completions if /completions returns 404."""
         mock_http_client = AsyncMock()
