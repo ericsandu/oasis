@@ -322,6 +322,25 @@ def _get_or_create_post_prefix(
         content = str(raw_post.get("content") or raw_post.get("text", ""))
         quote_content = raw_post.get("quote_content")
         original_author = raw_post.get("original_author")
+        original_post_id = raw_post.get("original_post_id")
+        if original_post_id is not None:
+            try:
+                original_post_id = int(original_post_id)
+            except (ValueError, TypeError):
+                original_post_id = None
+
+        if not quote_content:
+            quote_match = re.search(
+                r"User \d+ quoted a post from User (\d+)\.\s*Quote content:\s*(.+?)\.\s*Original Content:\s*(.+)",
+                content,
+                re.DOTALL | re.IGNORECASE,
+            )
+            if quote_match:
+                if not original_author:
+                    original_author = f"user_{quote_match.group(1)}"
+                quote_content = quote_match.group(2).strip()
+                content = quote_match.group(3).strip()
+
         num_likes = int(raw_post.get("num_likes", 0) or 0)
         num_shares = int(raw_post.get("num_shares", 0) or 0)
 
@@ -338,6 +357,7 @@ def _get_or_create_post_prefix(
             content=content,
             quote_content=str(quote_content) if quote_content else None,
             original_author=str(original_author) if original_author else None,
+            original_post_id=original_post_id,
             num_likes=num_likes,
             num_shares=num_shares,
         )
@@ -357,6 +377,25 @@ def _get_or_create_post_prefix(
     content = str(getattr(raw_post, "content", getattr(raw_post, "text", "")))
     quote_content = getattr(raw_post, "quote_content", None)
     original_author = getattr(raw_post, "original_author", None)
+    original_post_id = getattr(raw_post, "original_post_id", None)
+    if original_post_id is not None:
+        try:
+            original_post_id = int(original_post_id)
+        except (ValueError, TypeError):
+            original_post_id = None
+
+    if not quote_content:
+        quote_match = re.search(
+            r"User \d+ quoted a post from User (\d+)\.\s*Quote content:\s*(.+?)\.\s*Original Content:\s*(.+)",
+            content,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if quote_match:
+            if not original_author:
+                original_author = f"user_{quote_match.group(1)}"
+            quote_content = quote_match.group(2).strip()
+            content = quote_match.group(3).strip()
+
     num_likes = int(getattr(raw_post, "num_likes", 0) or 0)
     num_shares = int(getattr(raw_post, "num_shares", 0) or 0)
 
@@ -373,6 +412,7 @@ def _get_or_create_post_prefix(
         content=content,
         quote_content=str(quote_content) if quote_content else None,
         original_author=str(original_author) if original_author else None,
+        original_post_id=original_post_id,
         num_likes=num_likes,
         num_shares=num_shares,
     )

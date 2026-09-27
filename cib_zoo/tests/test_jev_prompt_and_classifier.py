@@ -105,7 +105,7 @@ class TestJEVPromptBuilder:
         assert JEVPromptBuilder.build_inverted_prefix(post) == JEVPromptBuilder.build_post_prefix(post)
 
     def test_post_prefix_with_quote_and_metrics(self) -> None:
-        """Verify post prefix formatting when post contains quote commentary and engagement counts."""
+        """Verify post prefix formatting puts original post first for KV cache reuse, followed by quote."""
         quote_post = PostPrefixData(
             post_id=45,
             author_name="reviewer_01",
@@ -113,13 +113,43 @@ class TestJEVPromptBuilder:
             content="Original AI safety framework.",
             quote_content="Essential read for all researchers.",
             original_author="original_author_42",
+            original_post_id=42,
             num_likes=12,
             num_shares=3,
         )
         prefix = JEVPromptBuilder.build_post_prefix(quote_post)
-        assert "[POST ID: 45] Author: @reviewer_01 | Topic: #safety | Likes: 12 | Reposts: 3\n" in prefix
-        assert 'Quote Commentary: "Essential read for all researchers."\n' in prefix
-        assert '[Quoted Post from @original_author_42]: "Original AI safety framework."\n\n' in prefix
+        assert prefix.startswith(
+            "[POST ID: 42] Author: @original_author_42 | Topic: #safety\n"
+            'Content: "Original AI safety framework."\n\n'
+        )
+        assert "[QUOTE POST ID: 45] Author: @reviewer_01 | Topic: #safety | Likes: 12 | Reposts: 3\n" in prefix
+        assert 'Quote Commentary: "Essential read for all researchers."\n\n' in prefix
+
+    def test_quote_post_prefix_starts_with_original_post_prefix(self) -> None:
+        """Verify quote post prefix strictly starts with original post prefix for 100% RadixAttention KV hit."""
+        orig_post = PostPrefixData(
+            post_id=101,
+            author_name="lead_dev",
+            topic="performance",
+            content="vLLM prefix caching cuts latency by 80%.",
+        )
+        orig_prefix = JEVPromptBuilder.build_post_prefix(orig_post)
+
+        quote_post = PostPrefixData(
+            post_id=202,
+            author_name="evaluator_99",
+            topic="performance",
+            content="vLLM prefix caching cuts latency by 80%.",
+            quote_content="Confirmed in our latest cluster benchmarks!",
+            original_author="lead_dev",
+            original_post_id=101,
+            num_likes=5,
+            num_shares=2,
+        )
+        quote_prefix = JEVPromptBuilder.build_post_prefix(quote_post)
+
+        # Crucial architectural proof: quote_prefix starts with the exact byte sequence of orig_prefix
+        assert quote_prefix.startswith(orig_prefix)
 
     def test_agent_suffix_formatting_and_stance(self) -> None:
         """Verify agent suffix formatting including persona, traits, and formatted stance score."""

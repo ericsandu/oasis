@@ -43,6 +43,7 @@ class PostPrefixData:
         content: Textual content body of the post.
         quote_content: Optional commentary text if this post is a quote post.
         original_author: Optional handle of the original author being quoted.
+        original_post_id: Optional ID of the original post being quoted.
         num_likes: Count of likes on the post for social proof signals.
         num_shares: Count of reposts/quotes on the post for social proof signals.
     """
@@ -53,6 +54,7 @@ class PostPrefixData:
     content: str
     quote_content: str | None = None
     original_author: str | None = None
+    original_post_id: int | None = None
     num_likes: int = 0
     num_shares: int = 0
 
@@ -100,6 +102,10 @@ class JEVPromptBuilder:
         Ensures byte-for-byte identical output for any PostPrefixData with identical attributes,
         enabling 70-90% KV-cache reuse across agents in vLLM / SGLang.
 
+        For quote posts, places the original post first so that it matches the
+        already-cached prefix of the original post in the RadixAttention trie,
+        followed by the quote commentary extension.
+
         Args:
             post: The post prefix data structure.
 
@@ -117,11 +123,20 @@ class JEVPromptBuilder:
         if post.quote_content and post.quote_content.strip():
             quote_clean = post.quote_content.strip()
             orig_author = (post.original_author or "user").strip().lstrip("@")
-            return (
-                f"[POST ID: {post.post_id}] Author: @{author_clean} | Topic: #{topic_clean}{metrics_part}\n"
-                f'Quote Commentary: "{quote_clean}"\n'
-                f'[Quoted Post from @{orig_author}]: "{content_clean}"\n\n'
+            orig_id_str = (
+                f"{post.original_post_id}"
+                if post.original_post_id is not None
+                else "orig"
             )
+            orig_part = (
+                f"[POST ID: {orig_id_str}] Author: @{orig_author} | Topic: #{topic_clean}\n"
+                f'Content: "{content_clean}"\n\n'
+            )
+            quote_part = (
+                f"[QUOTE POST ID: {post.post_id}] Author: @{author_clean} | Topic: #{topic_clean}{metrics_part}\n"
+                f'Quote Commentary: "{quote_clean}"\n\n'
+            )
+            return orig_part + quote_part
 
         return (
             f"[POST ID: {post.post_id}] Author: @{author_clean} | Topic: #{topic_clean}{metrics_part}\n"
