@@ -142,7 +142,8 @@ fi
 # 5. Launch vLLM Server on Allocated GPU
 JOB_SEED=${SLURM_JOB_ID:-$$}
 VLLM_PORT=$(( 18000 + (JOB_SEED % 4000) ))
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.82}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-}"
 
 echo "Starting vLLM server on isolated port ${VLLM_PORT}..."
 export HF_HUB_OFFLINE=1
@@ -151,12 +152,17 @@ export VLLM_NO_USAGE_STATS=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export VLLM_USE_FLASHINFER_SAMPLER=0
 
+VLLM_EXTRA_ARGS=()
+if [ -n "${MAX_MODEL_LEN}" ]; then
+    VLLM_EXTRA_ARGS+=(--max-model-len "${MAX_MODEL_LEN}")
+fi
+
 ${CONTAINER_RUN} python3 -m vllm.entrypoints.openai.api_server \
     --model "${RESOLVED_MODEL}" \
     --served-model-name "${RESOLVED_MODEL}" \
     --host 0.0.0.0 \
     --port "${VLLM_PORT}" \
-    --max-model-len 4096 \
+    ${VLLM_EXTRA_ARGS[@]+"${VLLM_EXTRA_ARGS[@]}"} \
     --gpu-memory-utilization "${GPU_MEM_UTIL}" \
     --enforce-eager \
     --enable-auto-tool-choice \
