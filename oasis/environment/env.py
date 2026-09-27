@@ -11,11 +11,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
 import sqlite3
 from datetime import datetime
+from typing import Any
 
 from oasis.environment.env_action import LLMAction, ManualAction
 from oasis.social_agent.agent import SocialAgent
