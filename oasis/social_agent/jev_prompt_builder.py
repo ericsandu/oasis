@@ -149,19 +149,22 @@ class JEVPromptBuilder:
         return cls.build_post_prefix(post)
 
     @staticmethod
-    def build_agent_suffix(
+    def build_agent_persona_context(
         agent: AgentSuffixData,
         topic: str | None = None,
     ) -> str:
-        """Constructs the personalized agent suffix with persona, stance, and 1-token reaction task.
+        """Constructs clean persona and stance context without 1-token reaction task instructions.
+
+        Used for secondary text generation (comments, quotes, spontaneous posts) to prevent
+        instruction conflict between the 1-token reaction task and generative response tasks.
 
         Args:
-            agent: The evaluating agent's persona, stance, and memory state.
-            topic: Optional post topic to contextualize the stance label line.
+            agent: The agent's persona, stance, and memory state.
+            topic: Optional topic to contextualize the stance label line.
                    Falls back to agent.topic if not explicitly supplied.
 
         Returns:
-            Personalized suffix string terminating in 'Action: '.
+            Clean persona context string with observer traits, stance, and recent actions.
         """
         user_clean = agent.user_name.strip().lstrip("@")
         mbti_clean = agent.mbti.strip()
@@ -187,12 +190,30 @@ class JEVPromptBuilder:
                 recent_clean = recent_clean[7:].strip()
             lines.append(f"[RECENT ACTIONS]: {recent_clean}")
 
-        lines.append(
-            "[TASK]: Choose single reaction: L (Like), R (Repost), Q (Quote), C (Comment), S (Skip). Output ONLY the letter."
-        )
-        lines.append("Action: ")
-
         return "\n".join(lines)
+
+    @classmethod
+    def build_agent_suffix(
+        cls,
+        agent: AgentSuffixData,
+        topic: str | None = None,
+    ) -> str:
+        """Constructs the personalized agent suffix with persona, stance, and 1-token reaction task.
+
+        Args:
+            agent: The evaluating agent's persona, stance, and memory state.
+            topic: Optional post topic to contextualize the stance label line.
+                   Falls back to agent.topic if not explicitly supplied.
+
+        Returns:
+            Personalized suffix string terminating in 'Action: '.
+        """
+        persona_context = cls.build_agent_persona_context(agent, topic=topic)
+        return (
+            f"{persona_context}\n"
+            "[TASK]: Choose single reaction: L (Like), R (Repost), Q (Quote), C (Comment), S (Skip). Output ONLY the letter.\n"
+            "Action: "
+        )
 
     @classmethod
     def assemble_eval_prompt(

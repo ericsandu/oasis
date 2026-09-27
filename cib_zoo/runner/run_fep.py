@@ -204,6 +204,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use Joint Evaluation Vectorization (JEV) engine for high-speed batched simulation.",
     )
+    parser.add_argument(
+        "--organic-post-rate",
+        type=float,
+        default=0.10,
+        help="Probability that an active organic agent publishes a spontaneous root post per step (default: 0.10).",
+    )
+    parser.add_argument(
+        "--bot-organic-post-rate",
+        type=float,
+        default=0.15,
+        help="Probability that a CIB bot publishes an organic background post per step (default: 0.15).",
+    )
     return parser.parse_args()
 
 
@@ -340,6 +352,9 @@ async def main() -> int:
                 max_actions_per_agent=1,
                 seed=42,
                 wait_for_platform=True,
+                organic_post_rate=args.organic_post_rate,
+                bot_organic_post_rate=args.bot_organic_post_rate,
+                community_map=community_map,
             )
             jev_env = JEVEnvironment(
                 env_or_graph=env,
@@ -479,12 +494,13 @@ async def main() -> int:
                         if bot_agent:
                             step_actions[bot_agent] = action_list
 
+            post_actions = []
             if args.use_jev and jev_env is not None:
-                # 1. Execute CIB bot actions if present
+                # 1. Execute CIB bot campaign actions if present
                 if step_actions:
                     await env.step(step_actions)
 
-                # 2. Evaluate active organic agents in JEV mode
+                # 2. Track 1: Parallel Feed Interaction Pass for active organic agents
                 active_org_ids = [a.social_agent_id for a in active_organic]
                 jev_res = await jev_env.step_jev(
                     step_index=step,
@@ -496,6 +512,20 @@ async def main() -> int:
                     f"C={jev_res.num_comments}, S={jev_res.num_skips} "
                     f"({jev_res.execution_time_seconds:.3f}s)"
                 )
+
+                # 3. Track 2: Separate Spontaneous Organic Posting Pass (Bots + Active Organic Agents)
+                posting_candidates = list(active_organic) + list(bot_agents.values())
+                post_actions = await jev_env.step_organic_posts(
+                    step_index=step,
+                    candidate_agents=posting_candidates,
+                )
+                if post_actions:
+                    bot_post_count = sum(1 for a in post_actions if a.user_id in bot_agents)
+                    org_post_count = len(post_actions) - bot_post_count
+                    logger.info(
+                        f"[JEV Organic Post Track] Step {step + 1}: Published {len(post_actions)} "
+                        f"spontaneous root posts ({bot_post_count} bots, {org_post_count} organic)."
+                    )
             else:
                 await env.step(step_actions)
 
@@ -504,7 +534,7 @@ async def main() -> int:
             e_pay_t = calculate_exposure_from_db(str(db_path), payload_post_id)
             dispatched_count = len(step_actions)
             if args.use_jev and jev_res is not None:
-                dispatched_count += jev_res.num_actions
+                dispatched_count += jev_res.num_actions + len(post_actions)
 
             exposure_timeline.append(
                 {

@@ -175,6 +175,38 @@ class JEVClassifierClient(Protocol):
         """
         ...
 
+    async def generate_post(
+        self,
+        agent_context: str,
+        topic: str,
+        stance_label: str = "Neutral",
+    ) -> str:
+        """Generate a realistic spontaneous root post for an agent given persona context and topic.
+
+        Args:
+            agent_context: Assembled agent persona, traits, and bio context.
+            topic: Primary topic or community category (e.g. 'tech', 'sports', 'politics').
+            stance_label: Qualitative stance descriptor (e.g. 'Supportive', 'Neutral').
+
+        Returns:
+            Generated post content string with relevant hashtag.
+        """
+        ...
+
+    async def generate_posts_batch(
+        self,
+        post_requests: list[tuple[str, str, str]],
+    ) -> list[str]:
+        """Batch generate spontaneous root posts for multiple (agent_context, topic, stance_label) tuples.
+
+        Args:
+            post_requests: List of (agent_context, topic, stance_label) tuples.
+
+        Returns:
+            List of generated root post content strings.
+        """
+        ...
+
 
 def compute_softmax(logits: dict[str, float]) -> dict[str, float]:
     """Computes numerically stable softmax probabilities over a dictionary of logits.
@@ -504,6 +536,52 @@ class MockJEVClassifierClient:
         return [
             await self.generate_quote(prompt, content)
             for prompt, content in quote_requests
+        ]
+
+    async def generate_post(
+        self,
+        agent_context: str,
+        topic: str,
+        stance_label: str = "Neutral",
+    ) -> str:
+        """Returns deterministic mock post string reflecting topic and stance."""
+        clean_topic = topic.strip().lstrip("#")
+        templates: dict[str, list[str]] = {
+            "tech": [
+                f"Excited to test out the new systems and optimization benchmarks today! #{clean_topic}",
+                f"Deep dive into compiler architecture and distributed scaling: thoughts? #{clean_topic}",
+                f"Modern developer workflows are evolving fast. Great time to build. #{clean_topic}",
+            ],
+            "sports": [
+                f"What a phenomenal match yesterday! Tactical masterclass on the pitch. #{clean_topic}",
+                f"Training cycle in full swing. Looking forward to the championship rounds! #{clean_topic}",
+                f"Analytics in sports continue to revolutionize game strategies. #{clean_topic}",
+            ],
+            "politics": [
+                f"Key legislative updates today on policy and governance reform. #{clean_topic}",
+                f"Constructive dialogue and civic participation are essential for progress. #{clean_topic}",
+                f"Examining economic data and market implications for the upcoming quarter. #{clean_topic}",
+            ],
+        }
+        topic_lower = clean_topic.lower()
+        pool = templates.get(
+            topic_lower,
+            [
+                f"Fascinating developments happening across the ecosystem today. #{clean_topic}",
+                f"Sharing some reflections and observations on current trends. #{clean_topic}",
+            ],
+        )
+        h = abs(hash((agent_context, clean_topic, stance_label, self.seed))) % len(pool)
+        return pool[h]
+
+    async def generate_posts_batch(
+        self,
+        post_requests: list[tuple[str, str, str]],
+    ) -> list[str]:
+        """Batch generates mock spontaneous root posts."""
+        return [
+            await self.generate_post(ctx, topic, stance)
+            for ctx, topic, stance in post_requests
         ]
 
     def resolve_budget(
@@ -951,6 +1029,10 @@ class VLLMJEVClassifierClient:
         post_content: str,
     ) -> str:
         """Generates a realistic social media comment reacting to a post."""
+        clean_user_prompt = user_prompt
+        if "[TASK]:" in clean_user_prompt:
+            clean_user_prompt = clean_user_prompt.split("[TASK]:")[0].strip()
+
         async with self._comment_semaphore:
             endpoint = f"{self.base_url}/chat/completions"
             messages = [
@@ -965,7 +1047,7 @@ class VLLMJEVClassifierClient:
                 {
                     "role": "user",
                     "content": (
-                        f"{user_prompt}\n\n"
+                        f"{clean_user_prompt}\n\n"
                         f'Target Post Content: "{post_content}"\n\n'
                         "Comment:"
                     ),
@@ -1016,6 +1098,10 @@ class VLLMJEVClassifierClient:
         post_content: str,
     ) -> str:
         """Generates a realistic social media quote commentary reacting to a post."""
+        clean_user_prompt = user_prompt
+        if "[TASK]:" in clean_user_prompt:
+            clean_user_prompt = clean_user_prompt.split("[TASK]:")[0].strip()
+
         async with self._comment_semaphore:
             endpoint = f"{self.base_url}/chat/completions"
             messages = [
@@ -1030,7 +1116,7 @@ class VLLMJEVClassifierClient:
                 {
                     "role": "user",
                     "content": (
-                        f"{user_prompt}\n\n"
+                        f"{clean_user_prompt}\n\n"
                         f'Target Post Content: "{post_content}"\n\n'
                         "Quote Commentary:"
                     ),
@@ -1072,6 +1158,81 @@ class VLLMJEVClassifierClient:
         tasks = [
             self.generate_quote(prompt, content)
             for prompt, content in quote_requests
+        ]
+        return await asyncio.gather(*tasks)
+
+    async def generate_post(
+        self,
+        agent_context: str,
+        topic: str,
+        stance_label: str = "Neutral",
+    ) -> str:
+        """Generates a realistic social media root post given agent persona and topic."""
+        clean_context = agent_context
+        if "[TASK]:" in clean_context:
+            clean_context = clean_context.split("[TASK]:")[0].strip()
+
+        clean_topic = topic.strip().lstrip("#")
+        async with self._comment_semaphore:
+            endpoint = f"{self.base_url}/chat/completions"
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are simulating an authentic social media user. "
+                        f"Write a single concise, engaging original post (1-2 sentences) discussing #{clean_topic}. "
+                        f"Reflect your personality, traits, and perspective. Always include the #{clean_topic} hashtag. "
+                        "Output ONLY the post text without quotes, explanation, or prefixes."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"{clean_context}\n\n"
+                        f"Topic: #{clean_topic} (Stance: {stance_label})\n\n"
+                        "Original Post:"
+                    ),
+                },
+            ]
+
+            payload = {
+                "model": self.model_name,
+                "messages": messages,
+                "max_tokens": self.comment_max_tokens,
+                "temperature": self.comment_temperature,
+            }
+
+            for attempt in range(self.max_retries + 1):
+                try:
+                    resp = await self._client.post(endpoint, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        raw_post = (
+                            data.get("choices", [{}])[0]
+                            .get("message", {})
+                            .get("content", "")
+                        )
+                        clean_post = raw_post.strip().strip('"\'')
+                        if clean_post:
+                            if f"#{clean_topic}" not in clean_post:
+                                clean_post = f"{clean_post} #{clean_topic}"
+                            return clean_post
+                except Exception as e:  # noqa: BLE001
+                    if attempt == self.max_retries:
+                        logger.warning("Post generation error: %s", e)
+                        return f"Sharing some thoughts on #{clean_topic} today."
+                    await asyncio.sleep(0.1 * (2**attempt))
+
+            return f"Sharing some thoughts on #{clean_topic} today."
+
+    async def generate_posts_batch(
+        self,
+        post_requests: list[tuple[str, str, str]],
+    ) -> list[str]:
+        """Concurrently generates spontaneous root posts for multiple requests."""
+        tasks = [
+            self.generate_post(ctx, topic, stance)
+            for ctx, topic, stance in post_requests
         ]
         return await asyncio.gather(*tasks)
 

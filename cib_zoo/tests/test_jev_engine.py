@@ -1245,3 +1245,168 @@ class TestASTGuardrailsStrictZeroSQLite3:
         """Verify environment variables enforce the 4 CPU thread limit."""
         for var in THREAD_VARS:
             assert os.environ.get(var) == "4", f"{var} not set to 4!"
+
+
+@pytest.mark.asyncio
+class TestJEVOrganicPostingTrack:
+    """Tests for the separate spontaneous organic posting track and clean persona context."""
+
+    def test_build_agent_persona_context_clean_formatting(self) -> None:
+        """Verify build_agent_persona_context outputs clean context without [TASK] instructions."""
+        agent = AgentSuffixData(
+            user_id=42,
+            user_name="test_user",
+            mbti="INTJ",
+            country="US",
+            bio="AI researcher and engineer",
+            stance_label="Supportive",
+            stance_score=0.75,
+            recent_actions="Liked post 1",
+            topic="tech",
+        )
+        context = JEVPromptBuilder.build_agent_persona_context(agent, topic="tech")
+        assert "[OBSERVER]: @test_user" in context
+        assert "INTJ" in context
+        assert "[STANCE]: #tech: Supportive (+0.75)" in context
+        assert "[RECENT ACTIONS]: Liked post 1" in context
+        assert "[TASK]:" not in context
+        assert "Action:" not in context
+
+        # Verify build_agent_suffix incorporates persona context and appends task
+        suffix = JEVPromptBuilder.build_agent_suffix(agent, topic="tech")
+        assert context in suffix
+        assert "[TASK]:" in suffix
+        assert suffix.endswith("Action: ")
+
+    async def test_mock_classifier_generate_post(self) -> None:
+        """Verify MockJEVClassifierClient produces topic-aligned spontaneous root posts."""
+        client = MockJEVClassifierClient(seed=123)
+        post = await client.generate_post(
+            agent_context="[OBSERVER]: @tech_analyst",
+            topic="tech",
+            stance_label="Supportive",
+        )
+        assert isinstance(post, str)
+        assert len(post) > 10
+        assert "#tech" in post
+
+        # Batch generation
+        batch_reqs = [
+            ("[OBSERVER]: @u1", "tech", "Supportive"),
+            ("[OBSERVER]: @u2", "sports", "Neutral"),
+            ("[OBSERVER]: @u3", "politics", "Skeptical"),
+        ]
+        results = await client.generate_posts_batch(batch_reqs)
+        assert len(results) == 3
+        assert "#tech" in results[0]
+        assert "#sports" in results[1]
+        assert "#politics" in results[2]
+
+    async def test_step_organic_posts_execution(self) -> None:
+        """Verify step_organic_posts generates and dispatches CREATE_POST actions for both bots and organic users."""
+        from cib_zoo.agent.cib_agent import CIBAgent, NoOpModelBackend
+        from oasis.social_agent.agent import SocialAgent
+        from oasis.social_platform.channel import Channel
+        from oasis.social_platform.config import UserInfo
+        from oasis.social_platform.typing import ActionType
+
+        channel = Channel()
+        graph = AgentGraph()
+
+        # Create organic agent
+        org_info = UserInfo(user_name="org_user_1", name="Organic User 1", description="Tech developer")
+        org_agent = SocialAgent(
+            agent_id=1,
+            user_info=org_info,
+            channel=channel,
+            model=NoOpModelBackend(),
+        )
+        graph.add_agent(org_agent)
+
+        # Create CIB bot
+        bot_info = UserInfo(user_name="cib_bot_10", name="Bot 10", description="Sports fan")
+        bot = CIBAgent(
+            agent_id=10,
+            user_info=bot_info,
+            channel=channel,
+            max_actions_per_step=3,
+        )
+        graph.add_agent(bot)
+
+        config = JEVExecutionConfig(
+            step_duration_seconds=300.0,
+            enable_organic_posting=True,
+            organic_post_rate=1.0,  # deterministic 100% posting for test
+            bot_organic_post_rate=1.0,
+            community_map={1: "tech", 10: "sports"},
+        )
+        client = MockJEVClassifierClient()
+        jev_env = JEVEnvironment(
+            env_or_graph=graph,
+            config=config,
+            classifier_client=client,
+        )
+
+        scheduled_posts = await jev_env.step_organic_posts(
+            step_index=0,
+            candidate_agents=[org_agent, bot],
+        )
+
+        assert len(scheduled_posts) == 2
+        post_uids = {p.user_id for p in scheduled_posts}
+        assert post_uids == {1, 10}
+
+        for sa in scheduled_posts:
+            act = sa.action_dict
+            assert act["action_type"] == ActionType.CREATE_POST
+            assert act["action_name"] == "create_post"
+            assert isinstance(act["content"], str)
+            if sa.user_id == 1:
+                assert "#tech" in act["content"]
+            elif sa.user_id == 10:
+                assert "#sports" in act["content"]
+
+        # Verify bot budget limiter recorded the post
+        assert bot.budget.step_action_count == 1
+        assert bot.budget.get_action_counts()[ActionType.CREATE_POST] == 1
+
+        # Verify BeliefState recorded create_post
+        org_b = jev_env.get_belief_state(1)
+        assert len(org_b.recent_actions) == 1
+        assert org_b.recent_actions[0].action_type == "create_post"
+
+    async def test_step_organic_posts_respects_bot_budget_exhaustion(self) -> None:
+        """Verify CIB bots do not post if CREATE_POST occurrence threshold is exhausted."""
+        from cib_zoo.agent.cib_agent import CIBAgent
+        from oasis.social_platform.channel import Channel
+        from oasis.social_platform.config import UserInfo
+        from oasis.social_platform.typing import ActionType
+
+        channel = Channel()
+        graph = AgentGraph()
+
+        bot_info = UserInfo(user_name="exhausted_bot", name="Exhausted Bot")
+        bot = CIBAgent(
+            agent_id=20,
+            user_info=bot_info,
+            channel=channel,
+            occurrence_thresholds={ActionType.CREATE_POST: 0},  # Cap to 0 posts
+        )
+        graph.add_agent(bot)
+
+        config = JEVExecutionConfig(
+            bot_organic_post_rate=1.0,
+            default_topic="tech",
+        )
+        client = MockJEVClassifierClient()
+        jev_env = JEVEnvironment(
+            env_or_graph=graph,
+            config=config,
+            classifier_client=client,
+        )
+
+        scheduled_posts = await jev_env.step_organic_posts(
+            step_index=0,
+            candidate_agents=[bot],
+        )
+        assert len(scheduled_posts) == 0

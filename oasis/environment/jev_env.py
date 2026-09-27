@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import re
 import time
 from collections.abc import Callable, Sequence
@@ -126,6 +127,10 @@ class JEVExecutionConfig:
     base_time: datetime | str | float | None = None
     stance_persuasion_alpha: float = 0.15
     stance_delta_max: float = 1.0
+    enable_organic_posting: bool = False
+    organic_post_rate: float = 0.10
+    bot_organic_post_rate: float = 0.15
+    community_map: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -138,6 +143,7 @@ class JEVStepResult:
         action_counts: Frequency distribution across reaction types {'L': ..., 'R': ..., 'C': ..., 'S': ...}.
         execution_time_seconds: Wall-clock duration of the step execution in seconds.
         scheduled_actions: Chronologically ordered list of ScheduledAction instances produced.
+        num_organic_posts: Number of spontaneous root posts dispatched in this step.
     """
 
     step_index: int
@@ -145,6 +151,7 @@ class JEVStepResult:
     action_counts: dict[str, int] = field(default_factory=dict)
     execution_time_seconds: float = 0.0
     scheduled_actions: list[ScheduledAction] = field(default_factory=list)
+    num_organic_posts: int = 0
 
     @property
     def num_likes(self) -> int:
@@ -170,6 +177,11 @@ class JEVStepResult:
     def num_skips(self) -> int:
         """Total number of skip actions emitted."""
         return self.action_counts.get("S", 0)
+
+    @property
+    def num_posts(self) -> int:
+        """Total number of spontaneous root posts emitted."""
+        return self.num_organic_posts or self.action_counts.get("P", 0)
 
     @property
     def num_actions(self) -> int:
@@ -804,18 +816,18 @@ class JEVEnvironment(OasisEnv):
                 ctx = item_context.get((res.user_id, res.post_id))
                 if ctx:
                     post_prefix, agent_suffix, _, _ = ctx
-                    prompt = JEVPromptBuilder.assemble_eval_prompt(
-                        post_prefix, agent_suffix
+                    persona_context = JEVPromptBuilder.build_agent_persona_context(
+                        agent_suffix, post_prefix.topic
                     )
-                    comment_requests.append((idx, prompt, post_prefix.content))
+                    comment_requests.append((idx, persona_context, post_prefix.content))
             elif res.action_char == "Q" and not res.quote_text:
                 ctx = item_context.get((res.user_id, res.post_id))
                 if ctx:
                     post_prefix, agent_suffix, _, _ = ctx
-                    prompt = JEVPromptBuilder.assemble_eval_prompt(
-                        post_prefix, agent_suffix
+                    persona_context = JEVPromptBuilder.build_agent_persona_context(
+                        agent_suffix, post_prefix.topic
                     )
-                    quote_requests.append((idx, prompt, post_prefix.content))
+                    quote_requests.append((idx, persona_context, post_prefix.content))
 
         if comment_requests:
             req_pairs = [(r[1], r[2]) for r in comment_requests]
@@ -955,8 +967,18 @@ class JEVEnvironment(OasisEnv):
         ):
             self.platform.sandbox_clock.time_step += 1
 
+        # Stage j.2: Optional spontaneous organic posting track
+        organic_posts: list[ScheduledAction] = []
+        if self.config.enable_organic_posting:
+            organic_posts = await self.step_organic_posts(
+                step_index=step_index,
+                candidate_agents=agents,
+                effective_base_time=effective_base_time,
+            )
+            scheduled_actions.extend(organic_posts)
+
         # Stage k: Compile action distribution and return JEVStepResult
-        action_counts = {"L": 0, "R": 0, "Q": 0, "C": 0, "S": 0}
+        action_counts = {"L": 0, "R": 0, "Q": 0, "C": 0, "S": 0, "P": 0}
         for sa in scheduled_actions:
             c = sa.action_dict.get("action_char", "S")
             action_counts[c] = action_counts.get(c, 0) + 1
@@ -968,7 +990,207 @@ class JEVEnvironment(OasisEnv):
             action_counts=action_counts,
             execution_time_seconds=exec_time,
             scheduled_actions=scheduled_actions,
+            num_organic_posts=len(organic_posts),
         )
+
+    async def step_organic_posts(
+        self,
+        step_index: int | None = None,
+        candidate_agents: list[Any] | None = None,
+        effective_base_time: datetime | str | float | None = None,
+    ) -> list[ScheduledAction]:
+        """Executes the separate spontaneous organic posting track.
+
+        Runs AFTER the parallel feed evaluation and interaction pass is complete.
+        Allows both organic agents and CIB bots to publish authentic root posts
+        (ActionType.CREATE_POST) aligned with their persona, community topic, and stance.
+
+        Args:
+            step_index: Integer simulation step index.
+            candidate_agents: Optional list of agent instances to consider for posting.
+                              Defaults to all agents in self.agent_graph.
+            effective_base_time: Base simulation start timestamp.
+
+        Returns:
+            List of ScheduledAction instances dispatched for CREATE_POST.
+        """
+        if step_index is None:
+            step_index = self.step_index
+
+        if effective_base_time is None:
+            if self.config.base_time is not None:
+                effective_base_time = self.config.base_time
+            elif (
+                hasattr(self.platform, "start_time")
+                and self.platform.start_time is not None
+            ):
+                effective_base_time = self.platform.start_time
+            else:
+                effective_base_time = datetime.now(timezone.utc)
+
+        # Collect candidate agents
+        if candidate_agents is not None:
+            agents = list(candidate_agents)
+        else:
+            all_agents_map: dict[int, Any] = {}
+            if hasattr(self.agent_graph, "agent_mappings"):
+                all_agents_map = dict(self.agent_graph.agent_mappings)
+            elif hasattr(self.agent_graph, "get_agents"):
+                raw = self.agent_graph.get_agents()
+                for item in raw:
+                    if isinstance(item, tuple):
+                        all_agents_map[item[0]] = item[1]
+                    elif hasattr(item, "social_agent_id"):
+                        all_agents_map[item.social_agent_id] = item
+                    elif hasattr(item, "agent_id"):
+                        all_agents_map[item.agent_id] = item
+            agents = list(all_agents_map.values())
+
+        if not agents:
+            return []
+
+        # Select agents to post based on organic post probability
+        selected_candidates: list[tuple[int, Any, str, str, str, float]] = []
+        for agent in agents:
+            user_id = _get_agent_id(agent)
+            act_freq = _get_agent_activity_frequency(agent)
+
+            # Check if agent is a CIB bot
+            is_bot = (
+                hasattr(agent, "budget")
+                or hasattr(agent, "budget_limiter")
+                or getattr(agent, "is_bot", False)
+                or type(agent).__name__ == "CIBAgent"
+            )
+            try:
+                from cib_zoo.agent.cib_agent import CIBAgent
+
+                if user_id in CIBAgent._registry or isinstance(agent, CIBAgent):
+                    is_bot = True
+            except ImportError:
+                pass
+
+            # Check bot budget limiter
+            if is_bot:
+                if hasattr(agent, "can_execute") and not agent.can_execute(ActionType.CREATE_POST):
+                    continue
+                elif hasattr(agent, "budget") and hasattr(agent.budget, "can_execute") and not agent.budget.can_execute(ActionType.CREATE_POST):
+                    continue
+                elif hasattr(agent, "budget_limiter") and hasattr(agent.budget_limiter, "can_execute") and not agent.budget_limiter.can_execute(ActionType.CREATE_POST):
+                    continue
+
+            post_rate = (
+                self.config.bot_organic_post_rate
+                if is_bot
+                else self.config.organic_post_rate
+            )
+            eff_prob = min(1.0, post_rate * act_freq)
+            if eff_prob <= 0.0 or random.random() > eff_prob:
+                continue
+
+            # Determine topic
+            topic = self.config.community_map.get(user_id)
+            if not topic:
+                bio = getattr(getattr(agent, "user_info", None), "description", "") or ""
+                bio_lower = bio.lower()
+                if "tech" in bio_lower or "engineer" in bio_lower or "developer" in bio_lower:
+                    topic = "tech"
+                elif "sport" in bio_lower or "football" in bio_lower or "basketball" in bio_lower:
+                    topic = "sports"
+                elif "policy" in bio_lower or "politics" in bio_lower or "gov" in bio_lower:
+                    topic = "politics"
+                else:
+                    topic = self.config.default_topic
+
+            belief_state = self.get_belief_state(user_id)
+            stance_label = belief_state.get_stance_label(topic)
+            agent_suffix = _create_agent_suffix(agent, belief_state, topic)
+            agent_context = JEVPromptBuilder.build_agent_persona_context(
+                agent_suffix, topic
+            )
+
+            selected_candidates.append(
+                (user_id, agent, agent_context, topic, stance_label, act_freq)
+            )
+
+        if not selected_candidates:
+            return []
+
+        # Batch generate post texts
+        reqs = [
+            (ctx, topic, stance)
+            for _, _, ctx, topic, stance, _ in selected_candidates
+        ]
+        if hasattr(self.classifier_client, "generate_posts_batch"):
+            post_texts = await self.classifier_client.generate_posts_batch(reqs)
+        elif hasattr(self.classifier_client, "generate_post"):
+            post_texts = [
+                await self.classifier_client.generate_post(ctx, topic, stance)
+                for ctx, topic, stance in reqs
+            ]
+        else:
+            post_texts = [
+                f"Sharing updates on #{topic} today."
+                for _, _, _, topic, _, _ in selected_candidates
+            ]
+
+        # Schedule and dispatch CREATE_POST actions
+        post_actions_to_schedule: list[tuple[int, dict[str, Any], float]] = []
+        for (user_id, agent, _, topic, _, act_freq), content in zip(
+            selected_candidates, post_texts
+        ):
+            action_dict = {
+                "action_type": ActionType.CREATE_POST,
+                "action_char": "P",
+                "action_name": "create_post",
+                "message": content,
+                "content": content,
+                "topic": topic,
+                "post_id": 0,
+            }
+            if hasattr(agent, "record_action"):
+                agent.record_action(ActionType.CREATE_POST)
+            elif hasattr(agent, "budget") and hasattr(agent.budget, "record_action"):
+                agent.budget.record_action(ActionType.CREATE_POST)
+            elif hasattr(agent, "budget_limiter") and hasattr(agent.budget_limiter, "record_action"):
+                agent.budget_limiter.record_action(ActionType.CREATE_POST)
+
+            post_actions_to_schedule.append((user_id, action_dict, act_freq))
+
+        scheduled_posts = self.scheduler.schedule_actions(
+            step_index=step_index,
+            base_time=effective_base_time,
+            agent_actions=post_actions_to_schedule,
+        )
+
+        # Record in agent BeliefState
+        for sa in scheduled_posts:
+            uid = sa.user_id
+            b_state = self.get_belief_state(uid)
+            top = sa.action_dict.get("topic", self.config.default_topic)
+            b_state.record_action(
+                action_type="create_post",
+                post_id=0,
+                topic=top,
+                timestamp_iso=sa.iso_timestamp,
+            )
+
+        # Enqueue and drain to OASIS Channel
+        self.action_queue.push_batch(scheduled_posts)
+        if self.channel is not None and not self.action_queue.empty():
+            formatter = (
+                self.config.channel_formatter or default_oasis_channel_formatter
+            )
+            await self.action_queue.drain_to_channel(self.channel, formatter=formatter)
+
+            if self.config.wait_for_platform and hasattr(
+                self.channel, "receive_queue"
+            ):
+                while not self.channel.receive_queue.empty():
+                    await asyncio.sleep(0.01)
+                await asyncio.sleep(0.05)
+
+        return scheduled_posts
 
     async def step(
         self,
