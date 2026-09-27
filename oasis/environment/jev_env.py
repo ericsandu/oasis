@@ -35,6 +35,7 @@ import os
 import random
 import re
 import time
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1176,6 +1177,197 @@ class JEVEnvironment(OasisEnv):
             )
 
         # Enqueue and drain to OASIS Channel
+        self.action_queue.push_batch(scheduled_posts)
+        if self.channel is not None and not self.action_queue.empty():
+            formatter = (
+                self.config.channel_formatter or default_oasis_channel_formatter
+            )
+            await self.action_queue.drain_to_channel(self.channel, formatter=formatter)
+
+            if self.config.wait_for_platform and hasattr(
+                self.channel, "receive_queue"
+            ):
+                while not self.channel.receive_queue.empty():
+                    await asyncio.sleep(0.01)
+                await asyncio.sleep(0.05)
+
+        return scheduled_posts
+
+    async def seed_initial_posts(
+        self,
+        agents: list[Any] | None = None,
+        num_posts: int = 15,
+        effective_base_time: datetime | str | float | None = None,
+    ) -> list[ScheduledAction]:
+        """Seeds initial organic background posts across communities at Step 0.
+
+        Populates the platform feed and recommendation index before simulation steps
+        begin, replacing empty feeds with realistic community discussions.
+
+        Args:
+            agents: Optional list of organic agents to author initial posts.
+                    Defaults to all agents in self.agent_graph.
+            num_posts: Target number of initial posts to generate (distributed across communities).
+            effective_base_time: Base simulation start timestamp.
+
+        Returns:
+            List of ScheduledAction instances dispatched for CREATE_POST.
+        """
+        if num_posts <= 0:
+            return []
+
+        # Collect candidate agents
+        if agents is None:
+            all_agents_map = {}
+            if hasattr(self.agent_graph, "agent_mappings"):
+                all_agents_map = dict(self.agent_graph.agent_mappings)
+            elif hasattr(self.agent_graph, "get_agents"):
+                raw = self.agent_graph.get_agents()
+                for item in raw:
+                    if isinstance(item, tuple):
+                        all_agents_map[item[0]] = item[1]
+                    elif hasattr(item, "social_agent_id"):
+                        all_agents_map[item.social_agent_id] = item
+                    elif hasattr(item, "agent_id"):
+                        all_agents_map[item.agent_id] = item
+            candidate_list = list(all_agents_map.values())
+        else:
+            candidate_list = list(agents)
+
+        if not candidate_list:
+            return []
+
+        # Filter out bots so initial background inventory is authentic organic posts
+        organic_candidates = []
+        for a in candidate_list:
+            uid = _get_agent_id(a)
+            is_bot = (
+                hasattr(a, "budget")
+                or hasattr(a, "budget_limiter")
+                or getattr(a, "is_bot", False)
+                or type(a).__name__ == "CIBAgent"
+            )
+            try:
+                from cib_zoo.agent.cib_agent import CIBAgent
+
+                if isinstance(a, CIBAgent):
+                    is_bot = True
+            except ImportError:
+                pass
+            if not is_bot:
+                organic_candidates.append(a)
+
+        if not organic_candidates:
+            organic_candidates = candidate_list
+
+        # Group by community/topic to ensure balanced topic distribution
+        by_topic: dict[str, list[Any]] = defaultdict(list)
+        for a in organic_candidates:
+            uid = _get_agent_id(a)
+            topic = self.config.community_map.get(uid)
+            if not topic:
+                bio = getattr(getattr(a, "user_info", None), "description", "") or ""
+                bio_lower = bio.lower()
+                if "tech" in bio_lower or "engineer" in bio_lower or "developer" in bio_lower:
+                    topic = "tech"
+                elif "sport" in bio_lower or "football" in bio_lower or "basketball" in bio_lower:
+                    topic = "sports"
+                elif "policy" in bio_lower or "politics" in bio_lower or "gov" in bio_lower:
+                    topic = "politics"
+                else:
+                    topic = self.config.default_topic
+            by_topic[topic].append(a)
+
+        # Sample agents evenly across topics up to num_posts
+        topics = list(by_topic.keys())
+        posts_per_topic = max(1, num_posts // len(topics)) if topics else num_posts
+        selected_agents: list[tuple[Any, str]] = []
+        for t in topics:
+            agents_in_topic = by_topic[t]
+            k = min(len(agents_in_topic), posts_per_topic)
+            selected_agents.extend((a, t) for a in random.sample(agents_in_topic, k))
+
+        # If we need more to reach num_posts, sample from remainder
+        if len(selected_agents) < num_posts and len(organic_candidates) > len(selected_agents):
+            remaining = [
+                (
+                    a,
+                    self.config.community_map.get(
+                        _get_agent_id(a), self.config.default_topic
+                    ),
+                )
+                for a in organic_candidates
+                if a not in [sa[0] for sa in selected_agents]
+            ]
+            needed = min(num_posts - len(selected_agents), len(remaining))
+            selected_agents.extend(random.sample(remaining, needed))
+
+        # Build requests
+        reqs = []
+        author_data = []
+        for agent, topic in selected_agents:
+            user_id = _get_agent_id(agent)
+            belief_state = self.get_belief_state(user_id)
+            stance_label = belief_state.get_stance_label(topic)
+            agent_suffix = _create_agent_suffix(agent, belief_state, topic)
+            agent_context = JEVPromptBuilder.build_agent_persona_context(
+                agent_suffix, topic
+            )
+            reqs.append((agent_context, topic, stance_label))
+            author_data.append((user_id, agent, topic))
+
+        if not reqs:
+            return []
+
+        # Batch generate post texts
+        if hasattr(self.classifier_client, "generate_posts_batch"):
+            post_texts = await self.classifier_client.generate_posts_batch(reqs)
+        elif hasattr(self.classifier_client, "generate_post"):
+            post_texts = [
+                await self.classifier_client.generate_post(ctx, topic, stance)
+                for ctx, topic, stance in reqs
+            ]
+        else:
+            post_texts = [
+                f"Sharing updates on #{topic} today." for _, topic, _ in reqs
+            ]
+
+        # Dispatch via channel
+        base_time = (
+            effective_base_time
+            or self.config.base_time
+            or datetime.now(timezone.utc)
+        )
+        post_actions_to_schedule = []
+        for (user_id, agent, topic), content in zip(author_data, post_texts):
+            action_dict = {
+                "action_type": ActionType.CREATE_POST,
+                "action_char": "P",
+                "action_name": "create_post",
+                "message": content,
+                "content": content,
+                "topic": topic,
+                "post_id": 0,
+            }
+            post_actions_to_schedule.append((user_id, action_dict, 1.0))
+
+        scheduled_posts = self.scheduler.schedule_actions(
+            step_index=0,
+            base_time=base_time,
+            agent_actions=post_actions_to_schedule,
+        )
+
+        for sa in scheduled_posts:
+            uid = sa.user_id
+            b_state = self.get_belief_state(uid)
+            top = sa.action_dict.get("topic", self.config.default_topic)
+            b_state.record_action(
+                action_type="create_post",
+                post_id=0,
+                topic=top,
+                timestamp_iso=sa.iso_timestamp,
+            )
+
         self.action_queue.push_batch(scheduled_posts)
         if self.channel is not None and not self.action_queue.empty():
             formatter = (

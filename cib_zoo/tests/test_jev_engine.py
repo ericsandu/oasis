@@ -1410,3 +1410,61 @@ class TestJEVOrganicPostingTrack:
             candidate_agents=[bot],
         )
         assert len(scheduled_posts) == 0
+
+    async def test_seed_initial_posts_populates_feed_across_communities(self) -> None:
+        """Verify seed_initial_posts distributes background posts across multiple communities."""
+        from cib_zoo.agent.cib_agent import CIBAgent, NoOpModelBackend
+        from oasis.social_agent.agent import SocialAgent
+        from oasis.social_platform.channel import Channel
+        from oasis.social_platform.config import UserInfo
+        from oasis.social_platform.typing import ActionType
+
+        CIBAgent.reset_registry()
+        channel = Channel()
+        graph = AgentGraph()
+
+        # Create agents across 3 communities: tech, sports, politics
+        agents = []
+        community_map = {}
+        for i in range(1, 10):
+            topic = "tech" if i <= 3 else ("sports" if i <= 6 else "politics")
+            community_map[i] = topic
+            info = UserInfo(
+                user_name=f"user_{i}",
+                name=f"User {i}",
+                description=f"{topic} enthusiast",
+            )
+            agent = SocialAgent(
+                agent_id=i,
+                user_info=info,
+                channel=channel,
+                model=NoOpModelBackend(),
+            )
+            graph.add_agent(agent)
+            agents.append(agent)
+
+        config = JEVExecutionConfig(
+            community_map=community_map,
+            default_topic="tech",
+        )
+        client = MockJEVClassifierClient()
+        jev_env = JEVEnvironment(
+            env_or_graph=graph,
+            config=config,
+            classifier_client=client,
+        )
+
+        seeded = await jev_env.seed_initial_posts(
+            agents=agents,
+            num_posts=6,
+        )
+
+        assert len(seeded) == 6
+        topics_seen = {sa.action_dict["topic"] for sa in seeded}
+        assert "tech" in topics_seen
+        assert "sports" in topics_seen
+        assert "politics" in topics_seen
+
+        for sa in seeded:
+            assert sa.action_dict["action_type"] == ActionType.CREATE_POST
+            assert f"#{sa.action_dict['topic']}" in sa.action_dict["content"]

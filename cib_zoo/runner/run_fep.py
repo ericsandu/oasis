@@ -216,6 +216,12 @@ def parse_args() -> argparse.Namespace:
         default=0.15,
         help="Probability that a CIB bot publishes an organic background post per step (default: 0.15).",
     )
+    parser.add_argument(
+        "--num-initial-posts",
+        type=int,
+        default=15,
+        help="Number of initial organic background posts to populate the feed across communities at step 0 (default: 15). Set to 0 to disable.",
+    )
     return parser.parse_args()
 
 
@@ -387,20 +393,43 @@ async def main() -> int:
 
         await env.step(seed_actions)
 
-        # Retrieve seeded post IDs
+        # Seed initial organic background posts across communities to populate feeds
+        initial_posts = []
+        if args.num_initial_posts > 0 and jev_env is not None:
+            initial_posts = await jev_env.seed_initial_posts(
+                agents=organic_agents,
+                num_posts=args.num_initial_posts,
+            )
+            logger.info(
+                f"✓ Populated initial feed with {len(initial_posts)} organic background posts across communities."
+            )
+
+        # Refresh recommendation table so agents immediately have rich, populated feeds
+        if hasattr(platform, "update_rec_table"):
+            try:
+                await platform.update_rec_table()
+                logger.info("✓ Platform recommendation table refreshed with initial post inventory.")
+            except Exception as e:
+                logger.warning(f"Could not refresh recommendation table after seeding: {e}")
+
+        # Retrieve seeded post IDs by content pattern
         conn = sqlite3.connect(str(db_path))
         cur = conn.cursor()
-        cur.execute("SELECT post_id FROM post ORDER BY post_id ASC")
-        seeded_posts = [r[0] for r in cur.fetchall()]
+        cur.execute(
+            "SELECT post_id FROM post WHERE content LIKE '%#baseline%' ORDER BY post_id ASC LIMIT 1"
+        )
+        row_base = cur.fetchone()
+        baseline_post_id = row_base[0] if row_base else 1
+
+        cur.execute(
+            "SELECT post_id FROM post WHERE content LIKE '%#target%' ORDER BY post_id ASC LIMIT 1"
+        )
+        row_pay = cur.fetchone()
+        payload_post_id = row_pay[0] if row_pay else (baseline_post_id + 1)
         conn.close()
 
-        baseline_post_id = seeded_posts[0] if len(seeded_posts) > 0 else 1
-        payload_post_id = (
-            seeded_posts[1] if len(seeded_posts) > 1 else (baseline_post_id + 1)
-        )
-
         # In cold-start mode, if payload post was not seeded by organic agent, bot squad seeds it at step 1
-        cold_start_seeded = len(seeded_posts) > 1
+        cold_start_seeded = (row_pay is not None)
 
         # 5. Compile Campaign Preset (if bots present)
         campaign = None
