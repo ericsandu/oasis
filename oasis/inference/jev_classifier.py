@@ -532,6 +532,8 @@ class VLLMJEVClassifierClient:
         timeout: float = 30.0,
         client: httpx.AsyncClient | None = None,
         temperature: float = 0.0,
+        classify_max_tokens: int = 4,
+        stop: list[str] | None = None,
         auto_generate_comments: bool = False,
         max_retries: int = 2,
         comment_temperature: float = 0.7,
@@ -547,7 +549,9 @@ class VLLMJEVClassifierClient:
             token_id_map: Optional mapping from action chars ('L', 'R', 'C', 'S') to vocab token IDs.
             timeout: HTTP request timeout in seconds.
             client: Optional shared httpx.AsyncClient instance.
-            temperature: Sampling temperature for 1-token classification (0.0 = greedy).
+            temperature: Sampling temperature for action classification.
+            classify_max_tokens: Maximum tokens for action classification (default: 4, to allow '[L]', 'Like', etc.).
+            stop: Optional stop sequences for completion (default: ['\n']).
             auto_generate_comments: If True, automatically trigger comment generation on 'C'.
             max_retries: Max retry attempts on transient HTTP/connection errors.
             comment_temperature: Temperature for secondary comment generation.
@@ -561,6 +565,8 @@ class VLLMJEVClassifierClient:
         self.token_id_map = dict(token_id_map or {})
         self.timeout = timeout
         self.temperature = temperature
+        self.classify_max_tokens = classify_max_tokens
+        self.stop = stop or ["\n"]
         self.auto_generate_comments = auto_generate_comments
         self.max_retries = max_retries
         self.comment_temperature = comment_temperature
@@ -611,7 +617,7 @@ class VLLMJEVClassifierClient:
     ) -> list[ClassificationResult]:
         """Classifies a batch of EvalItem prompts using vLLM /v1/completions.
 
-        Passes max_tokens=1 and logprobs=5 to perform item-level parallel forward passes
+        Passes classify_max_tokens and logprobs=5 to perform item-level parallel forward passes
         leveraging vLLM RadixAttention shared prefix KV-cache reuse.
         """
         if not items:
@@ -623,10 +629,12 @@ class VLLMJEVClassifierClient:
         payload: dict[str, Any] = {
             "model": self.model_name,
             "prompt": prompts,
-            "max_tokens": 1,
+            "max_tokens": self.classify_max_tokens,
             "temperature": self.temperature,
             "logprobs": 5,
         }
+        if self.stop:
+            payload["stop"] = self.stop
 
         formatted_bias = self._format_logit_bias_payload()
         if formatted_bias:
@@ -696,6 +704,9 @@ class VLLMJEVClassifierClient:
                     if top_logprobs_list and len(top_logprobs_list) > 0:
                         first_top = top_logprobs_list[0] or {}
                         for tok_str, lp in first_top.items():
+                            clean_tok = tok_str.strip()
+                            if clean_tok in {"[", "]", "", ":", "-", ">"}:
+                                continue
                             char_candidate = (
                                 JEVPromptBuilder.parse_action_char(tok_str)
                             )
@@ -777,7 +788,7 @@ class VLLMJEVClassifierClient:
             payload = {
                 "model": self.model_name,
                 "messages": [{"role": "user", "content": item.full_prompt}],
-                "max_tokens": 1,
+                "max_tokens": self.classify_max_tokens,
                 "temperature": self.temperature,
             }
             try:

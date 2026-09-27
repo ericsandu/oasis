@@ -69,7 +69,13 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
+logging.root.setLevel(logging.INFO)
+for _h in logging.root.handlers:
+    _h.setLevel(logging.INFO)
 logger = logging.getLogger("cib_zoo.runner")
+logger.setLevel(logging.INFO)
+logging.getLogger("oasis.environment.jev_env").setLevel(logging.INFO)
+logging.getLogger("oasis.inference.jev_classifier").setLevel(logging.INFO)
 
 
 def make_user_info(agent_id: int, name: str) -> UserInfo:
@@ -318,6 +324,8 @@ async def main() -> int:
                 jev_client = VLLMJEVClassifierClient(
                     base_url=args.vllm_url,
                     model_name=args.model,
+                    temperature=args.temperature,
+                    classify_max_tokens=4,
                     comment_max_tokens=64,
                     comment_temperature=args.temperature,
                 )
@@ -493,13 +501,17 @@ async def main() -> int:
             # Record step exposure telemetry
             e_base_t = calculate_exposure_from_db(str(db_path), baseline_post_id)
             e_pay_t = calculate_exposure_from_db(str(db_path), payload_post_id)
+            dispatched_count = len(step_actions)
+            if args.use_jev and jev_res is not None:
+                dispatched_count += jev_res.num_actions
+
             exposure_timeline.append(
                 {
                     "step": step + 1,
                     "baseline_exposure": e_base_t,
                     "payload_exposure": e_pay_t,
                     "net_lift": e_pay_t - e_base_t,
-                    "actions_dispatched": len(step_actions),
+                    "actions_dispatched": dispatched_count,
                 }
             )
 

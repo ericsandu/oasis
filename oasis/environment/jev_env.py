@@ -946,6 +946,8 @@ class JEVEnvironment(OasisEnv):
             ):
                 while not self.channel.receive_queue.empty():
                     await asyncio.sleep(0.01)
+                # Allow platform task to commit final action to SQLite
+                await asyncio.sleep(0.05)
 
         # Advance sandbox clock step if available
         if hasattr(self.platform, "sandbox_clock") and hasattr(

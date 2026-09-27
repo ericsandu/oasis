@@ -561,7 +561,7 @@ class TestVLLMJEVClassifierClient:
         assert endpoint == "http://mock-vllm:8000/v1/completions"
         assert payload["model"] == "Qwen/Qwen2.5-32B-Instruct"
         assert payload["prompt"] == ["Post 10 Prompt", "Post 20 Prompt"]
-        assert payload["max_tokens"] == 1
+        assert payload["max_tokens"] == 4
         assert payload["logprobs"] == 5
 
         # Assert results were parsed accurately
