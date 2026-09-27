@@ -163,7 +163,7 @@ class SocialAgent(ChatAgent):
                 # Abort graph action for if 100w Agent
                 # self.perform_agent_graph_action(action_name, args)
 
-                return response
+            return response
         except Exception as e:
             agent_log.error(f"Agent {self.social_agent_id} error: {e}")
             return e
