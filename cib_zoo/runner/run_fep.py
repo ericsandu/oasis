@@ -181,6 +181,18 @@ def parse_args() -> argparse.Namespace:
         default="./cib_results.json",
         help="Path to save experiment evaluation telemetry.",
     )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=512,
+        help="Maximum output generation tokens per agent turn (default: 512).",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help="Sampling temperature for LLM generation (default: 0.7).",
+    )
     return parser.parse_args()
 
 
@@ -232,8 +244,8 @@ async def main() -> int:
                 organic_model = get_vllm_model(
                     model_type=args.model,
                     url=args.vllm_url,
-                    temperature=0.7,
-                    max_tokens=256,
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
                 )
                 is_llm_mode = True
             else:

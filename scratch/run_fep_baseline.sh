@@ -140,7 +140,8 @@ JOB_SEED=${SLURM_JOB_ID:-$$}
 VLLM_PORT=$(( 18000 + (JOB_SEED % 5000) ))
 MODEL_BASENAME=$(basename "$RESOLVED_MODEL")
 TOOL_PARSER="${VLLM_TOOL_PARSER:-hermes}"
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.80}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-}"
 
 echo "Starting vLLM server on isolated port $VLLM_PORT for model $RESOLVED_MODEL ($MODEL_BASENAME)..."
 echo "vLLM Tool Parser: $TOOL_PARSER | GPU Memory Utilization: $GPU_MEM_UTIL"
@@ -162,14 +163,14 @@ export TRANSFORMERS_OFFLINE=1
 export VLLM_NO_USAGE_STATS=1
 export PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True'
 export VLLM_USE_FLASHINFER_SAMPLER=0
-${VLLM_USE_V1:+export VLLM_USE_V1=$VLLM_USE_V1}
+\${VLLM_USE_V1:+export VLLM_USE_V1=\$VLLM_USE_V1}
 
 exec python3 -m vllm.entrypoints.openai.api_server \
     --model '$RESOLVED_MODEL' \
     --served-model-name '$RESOLVED_MODEL' \
     --host 0.0.0.0 \
     --port '$VLLM_PORT' \
-    --max-model-len 4096 \
+    ${MAX_MODEL_LEN:+--max-model-len '$MAX_MODEL_LEN'} \
     --gpu-memory-utilization '$GPU_MEM_UTIL' \
     --enforce-eager \
     --enable-auto-tool-choice \

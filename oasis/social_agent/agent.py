@@ -66,7 +66,8 @@ class SocialAgent(ChatAgent):
                  available_actions: list[ActionType] = None,
                  tools: list[FunctionTool | Callable] | None = None,
                  max_iteration: int = 1,
-                 interview_record: bool = False):
+                 interview_record: bool = False,
+                 message_window_size: int | None = None):
         self.social_agent_id = agent_id
         self.user_info = user_info
         self.channel = channel or Channel()
@@ -107,6 +108,7 @@ class SocialAgent(ChatAgent):
             model=model,
             scheduling_strategy='random_model',
             tools=all_tools,
+            message_window_size=message_window_size,
         )
         self.max_iteration = max_iteration
         self.interview_record = interview_record

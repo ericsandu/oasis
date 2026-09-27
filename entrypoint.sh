@@ -24,16 +24,16 @@ if [ "$START_VLLM" = "1" ]; then
     echo "GPU detected. Starting vLLM central node in background..."
     MODEL_NAME="${VLLM_MODEL:-Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8}"
     VLLM_PORT="${VLLM_PORT:-8000}"
-    MAX_LEN="${VLLM_MAX_LEN:-4096}"
-    GPU_MEM="${VLLM_GPU_MEM:-0.85}"
+    MAX_LEN="${VLLM_MAX_LEN:-}"
+    GPU_MEM="${VLLM_GPU_MEM:-0.90}"
     
     TOOL_PARSER="${VLLM_TOOL_PARSER:-hermes}"
     export VLLM_USE_FLASHINFER_SAMPLER=0
-    echo "vLLM Model: $MODEL_NAME | Port: $VLLM_PORT | GPU Mem: $GPU_MEM | MaxLen: $MAX_LEN | Tool Parser: $TOOL_PARSER"
+    echo "vLLM Model: $MODEL_NAME | Port: $VLLM_PORT | GPU Mem: $GPU_MEM | MaxLen: ${MAX_LEN:-native} | Tool Parser: $TOOL_PARSER"
     python3 -m vllm.entrypoints.openai.api_server \
         --model "$MODEL_NAME" \
         --port "$VLLM_PORT" \
-        --max-model-len "$MAX_LEN" \
+        ${MAX_LEN:+--max-model-len "$MAX_LEN"} \
         --gpu-memory-utilization "$GPU_MEM" \
         --enforce-eager \
         --enable-auto-tool-choice \
