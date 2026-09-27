@@ -50,12 +50,15 @@ for pkg in (
 
         sys.modules[pkg] = MagicMock()
 
+import shutil
+
 from cib_zoo.agent.cib_agent import CIBAgent, NoOpModelBackend
 from cib_zoo.metrics.amplification import (
     calculate_causal_amplification,
     calculate_differential_amplification,
     calculate_exposure_from_db,
 )
+from cib_zoo.modifiers.bio_scraping import BioScrapingModifier
 from cib_zoo.presets import create_s1_campaign, create_s2_campaign, create_s3_campaign
 from cib_zoo.topology.network_builder import build_network, sync_network_to_db
 from oasis.environment.env import OasisEnv
@@ -100,6 +103,112 @@ def make_user_info(agent_id: int, name: str) -> UserInfo:
         recsys_type="twitter",
         is_controllable=False,
     )
+
+
+def compile_campaign_preset(
+    preset: str,
+    bot_ids: list[int],
+    organic_agents: list[Any],
+    baseline_post_id: int,
+    payload_post_id: int,
+    total_campaign_steps: int,
+) -> Any:
+    """Compile declarative campaign config for the specified preset."""
+    if not bot_ids or preset == "baseline":
+        return None
+    warmup_steps = max(1, total_campaign_steps // 2)
+    strike_steps = max(1, total_campaign_steps - warmup_steps)
+    if preset == "s1":
+        return create_s1_campaign(
+            warmup_bot_ids=bot_ids[: len(bot_ids) // 2 or 1],
+            strike_bot_ids=bot_ids,
+            influencer_ids=[organic_agents[0].social_agent_id],
+            anchor_post_id=baseline_post_id,
+            payload_post_id=payload_post_id,
+            payload_template="Amplifying payload narrative #target",
+            warmup_steps=warmup_steps,
+            strike_steps=strike_steps,
+        )
+    elif preset == "s2":
+        return create_s2_campaign(
+            sentinel_bot_ids=[bot_ids[0]],
+            strike_bot_ids=bot_ids[1:] if len(bot_ids) > 1 else bot_ids,
+            target_post_id=payload_post_id,
+            raid_templates=["Perspective A #target", "Perspective B #target"],
+            discovery_steps=warmup_steps,
+            strike_steps=strike_steps,
+        )
+    elif preset == "s3":
+        return create_s3_campaign(
+            bridge_bot_ids=[bot_ids[0]],
+            raid_bot_ids=[bot_ids[1 % len(bot_ids)]],
+            astroturf_bot_ids=bot_ids,
+            target_influencer_ids=[organic_agents[0].social_agent_id],
+            target_post_id=payload_post_id,
+            raid_templates=["Raid commentary #target"],
+            astroturf_hashtag="target",
+            astroturf_template="Astroturf viral broadcast #target",
+        )
+    return None
+
+
+async def execute_narrative_injection(
+    env: Any,
+    platform: Any,
+    organic_agents: list[Any],
+    bot_agents: dict[int, Any],
+    bot_ids: list[int],
+    db_path: Path,
+    topic_mode: str,
+    preset: str,
+    enable_bio_scraping: bool,
+) -> tuple[int, int]:
+    """Inject baseline and target narrative posts into the living platform environment."""
+    injection_actions: dict = {
+        organic_agents[0]: [
+            ManualAction(ActionType.CREATE_POST, {"content": "Organic topic discussion #baseline"})
+        ]
+    }
+    if topic_mode == "existing" or (preset != "baseline" and bot_agents):
+        target_poster = bot_agents[bot_ids[0]] if bot_agents else organic_agents[1]
+        injection_actions[target_poster] = [
+            ManualAction(ActionType.CREATE_POST, {"content": "Controversial payload narrative #target"})
+        ]
+    await env.step(injection_actions)
+
+    if hasattr(platform, "update_rec_table"):
+        try:
+            await platform.update_rec_table()
+        except Exception:
+            pass
+
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute("SELECT post_id FROM post WHERE content LIKE '%#baseline%' ORDER BY post_id ASC LIMIT 1")
+    row_base = cur.fetchone()
+    base_id = row_base[0] if row_base else 1
+
+    cur.execute("SELECT post_id FROM post WHERE content LIKE '%#target%' ORDER BY post_id ASC LIMIT 1")
+    row_pay = cur.fetchone()
+    pay_id = row_pay[0] if row_pay else (base_id + 1)
+
+    if enable_bio_scraping and bot_agents:
+        bio_mod = BioScrapingModifier()
+        bio_mod.adapt_squad_personas(
+            squad_bots=list(bot_agents.values()),
+            candidate_organic_agents=organic_agents,
+        )
+        for bot in bot_agents.values():
+            u = bot.user_info
+            cur.execute(
+                "UPDATE user SET user_name=?, name=?, bio=? WHERE user_id=?",
+                (u.user_name, u.name, u.description, bot.social_agent_id),
+            )
+        conn.commit()
+        logger.info("✓ BioScrapingModifier adapted bot squad to chameleon demographic personas.")
+
+    conn.close()
+    return base_id, pay_id
 
 
 def parse_args() -> argparse.Namespace:
@@ -221,6 +330,23 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=15,
         help="Number of initial organic background posts to populate the feed across communities at step 0 (default: 15). Set to 0 to disable.",
+    )
+    parser.add_argument(
+        "--costart-steps",
+        type=int,
+        default=2,
+        help="Number of shared initial burn-in steps where active organic agents post and interact before baseline/target injection (default: 2). Set to 0 to disable.",
+    )
+    parser.add_argument(
+        "--costart-cache-dir",
+        type=str,
+        default=None,
+        help="Directory to cache and load shared co-start SQLite checkpoints for multi-run efficiency (default: None).",
+    )
+    parser.add_argument(
+        "--enable-bio-scraping",
+        action="store_true",
+        help="Enable Vector 7 Bio-Scraping Copyattack modifier for bots to adopt chameleon demographic personas.",
     )
     return parser.parse_args()
 
@@ -368,32 +494,7 @@ async def main() -> int:
                 classifier_client=jev_client,
             )
 
-        # 4. Step 0: Seed Posts according to topic mode
-        seed_actions: dict = {}
-        if args.topic_mode == "existing":
-            # Topic has established baseline and target post circulating
-            seed_actions[organic_agents[0]] = [
-                ManualAction(
-                    ActionType.CREATE_POST,
-                    {"content": "Organic topic discussion #baseline"},
-                ),
-                ManualAction(
-                    ActionType.CREATE_POST,
-                    {"content": "Controversial payload narrative #target"},
-                ),
-            ]
-        else:
-            # Cold-start: Only baseline post exists at step 0; target post injected in step 1
-            seed_actions[organic_agents[0]] = [
-                ManualAction(
-                    ActionType.CREATE_POST,
-                    {"content": "Organic topic discussion #baseline"},
-                ),
-            ]
-
-        await env.step(seed_actions)
-
-        # Seed initial organic background posts across communities to populate feeds
+        # 4. Step 0: Initial feed population and co-start preparation
         initial_posts = []
         if args.num_initial_posts > 0 and jev_env is not None:
             initial_posts = await jev_env.seed_initial_posts(
@@ -412,83 +513,81 @@ async def main() -> int:
             except Exception as e:
                 logger.warning(f"Could not refresh recommendation table after seeding: {e}")
 
-        # Retrieve seeded post IDs by content pattern
-        conn = sqlite3.connect(str(db_path))
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT post_id FROM post WHERE content LIKE '%#baseline%' ORDER BY post_id ASC LIMIT 1"
-        )
-        row_base = cur.fetchone()
-        baseline_post_id = row_base[0] if row_base else 1
+        # Checkpoint / Cache path for co-start
+        costart_cache_file = None
+        if args.costart_cache_dir and args.costart_steps > 0:
+            cache_dir = Path(args.costart_cache_dir).resolve()
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            costart_cache_file = cache_dir / f"costart_{args.topology}_{args.num_organic}org_init{args.num_initial_posts}_cs{args.costart_steps}.db"
 
-        cur.execute(
-            "SELECT post_id FROM post WHERE content LIKE '%#target%' ORDER BY post_id ASC LIMIT 1"
-        )
-        row_pay = cur.fetchone()
-        payload_post_id = row_pay[0] if row_pay else (baseline_post_id + 1)
-        conn.close()
-
-        # In cold-start mode, if payload post was not seeded by organic agent, bot squad seeds it at step 1
-        cold_start_seeded = (row_pay is not None)
-
-        # 5. Compile Campaign Preset (if bots present)
+        start_step = 0
+        total_steps = args.costart_steps + args.max_steps if args.costart_steps > 0 else args.max_steps
+        baseline_post_id = 1
+        payload_post_id = 2
         campaign = None
-        warmup_steps = max(1, args.max_steps // 2)
-        strike_steps = max(1, args.max_steps - warmup_steps)
 
-        if num_bots > 0 and args.preset != "baseline":
-            if args.preset == "s1":
-                campaign = create_s1_campaign(
-                    warmup_bot_ids=bot_ids[: len(bot_ids) // 2 or 1],
-                    strike_bot_ids=bot_ids,
-                    influencer_ids=[organic_agents[0].social_agent_id],
-                    anchor_post_id=baseline_post_id,
-                    payload_post_id=payload_post_id,
-                    payload_template="Amplifying payload narrative #target",
-                    warmup_steps=warmup_steps,
-                    strike_steps=strike_steps,
-                )
-            elif args.preset == "s2":
-                campaign = create_s2_campaign(
-                    sentinel_bot_ids=[bot_ids[0]],
-                    strike_bot_ids=bot_ids[1:] if len(bot_ids) > 1 else bot_ids,
-                    target_post_id=payload_post_id,
-                    raid_templates=["Perspective A #target", "Perspective B #target"],
-                    discovery_steps=warmup_steps,
-                    strike_steps=strike_steps,
-                )
-            elif args.preset == "s3":
-                campaign = create_s3_campaign(
-                    bridge_bot_ids=[bot_ids[0]],
-                    raid_bot_ids=[bot_ids[1 % len(bot_ids)]],
-                    astroturf_bot_ids=bot_ids,
-                    target_influencer_ids=[organic_agents[0].social_agent_id],
-                    target_post_id=payload_post_id,
-                    raid_templates=["Raid commentary #target"],
-                    astroturf_hashtag="target",
-                    astroturf_template="Astroturf viral broadcast #target",
-                )
+        if costart_cache_file and costart_cache_file.exists():
+            shutil.copy(costart_cache_file, db_path)
+            start_step = args.costart_steps
+            logger.info(
+                f"✓ Reusing cached co-start database from {costart_cache_file}. Fast-forwarding to step {start_step + 1}."
+            )
+        elif args.costart_steps == 0:
+            # Legacy direct start: inject baseline and target at step 0
+            baseline_post_id, payload_post_id = await execute_narrative_injection(
+                env=env,
+                platform=platform,
+                organic_agents=organic_agents,
+                bot_agents=bot_agents,
+                bot_ids=bot_ids,
+                db_path=db_path,
+                topic_mode=args.topic_mode,
+                preset=args.preset,
+                enable_bio_scraping=args.enable_bio_scraping,
+            )
+            campaign = compile_campaign_preset(
+                preset=args.preset,
+                bot_ids=bot_ids,
+                organic_agents=organic_agents,
+                baseline_post_id=baseline_post_id,
+                payload_post_id=payload_post_id,
+                total_campaign_steps=args.max_steps,
+            )
 
-        campaign_name = campaign.campaign_name if campaign else "OrganicControlBaseline"
-        total_steps = campaign.total_steps if campaign else args.max_steps
-        logger.info(f"Executing campaign '{campaign_name}' ({total_steps} steps)...")
+        campaign_name = campaign.campaign_name if campaign else f"Preset_{args.preset}"
+        logger.info(f"Executing campaign '{campaign_name}' ({total_steps} total steps, {args.costart_steps} co-start)...")
 
         # 6. Main Simulation Loop
         exposure_timeline = []
 
-        for step in range(total_steps):
+        for step in range(start_step, total_steps):
             step_actions: dict = {}
 
-            # Cold-start injection at step 0 if needed
-            if args.topic_mode == "cold_start" and not cold_start_seeded and bot_agents:
-                first_bot = bot_agents[bot_ids[0]]
-                step_actions[first_bot] = [
-                    ManualAction(
-                        ActionType.CREATE_POST,
-                        {"content": "Controversial payload narrative #target"},
-                    )
-                ]
-                cold_start_seeded = True
+            # Transition step: End of co-start -> Inject focal baseline & target narrative
+            if args.costart_steps > 0 and step == args.costart_steps:
+                baseline_post_id, payload_post_id = await execute_narrative_injection(
+                    env=env,
+                    platform=platform,
+                    organic_agents=organic_agents,
+                    bot_agents=bot_agents,
+                    bot_ids=bot_ids,
+                    db_path=db_path,
+                    topic_mode=args.topic_mode,
+                    preset=args.preset,
+                    enable_bio_scraping=args.enable_bio_scraping,
+                )
+                campaign = compile_campaign_preset(
+                    preset=args.preset,
+                    bot_ids=bot_ids,
+                    organic_agents=organic_agents,
+                    baseline_post_id=baseline_post_id,
+                    payload_post_id=payload_post_id,
+                    total_campaign_steps=args.max_steps,
+                )
+                logger.info(
+                    f"✓ Injected focal narratives at step {step + 1}: "
+                    f"Baseline ID={baseline_post_id}, Payload ID={payload_post_id}. Campaign '{args.preset}' activated."
+                )
 
             # Sample active organic agents
             num_active = max(1, int(len(organic_agents) * args.active_ratio))
@@ -499,12 +598,12 @@ async def main() -> int:
                     if is_llm_mode:
                         step_actions[org_agent] = LLMAction()
                     else:
-                        # In local CPU mode: default to DO_NOTHING
                         step_actions[org_agent] = [ManualAction(ActionType.DO_NOTHING, {})]
 
-            # Generate CIB actions for active squads
-            if campaign is not None:
-                phase, rel_step = campaign.get_active_phase(step)
+            # Generate CIB actions for active squads (only after co-start phase)
+            if campaign is not None and step >= args.costart_steps:
+                rel_campaign_step = step - args.costart_steps
+                phase, rel_step = campaign.get_active_phase(rel_campaign_step)
                 for squad in phase.squads:
                     squad_bot_instances = [
                         bot_agents[b_id] for b_id in squad.bot_ids if b_id in bot_agents
@@ -558,16 +657,27 @@ async def main() -> int:
             else:
                 await env.step(step_actions)
 
+            # Checkpoint save at end of co-start burn-in
+            if costart_cache_file and step == args.costart_steps - 1:
+                shutil.copy(db_path, costart_cache_file)
+                logger.info(f"✓ Cached shared co-start checkpoint database to {costart_cache_file}")
+
             # Record step exposure telemetry
-            e_base_t = calculate_exposure_from_db(str(db_path), baseline_post_id)
-            e_pay_t = calculate_exposure_from_db(str(db_path), payload_post_id)
+            e_base_t = 0.0
+            e_pay_t = 0.0
+            if step >= args.costart_steps:
+                e_base_t = calculate_exposure_from_db(str(db_path), baseline_post_id)
+                e_pay_t = calculate_exposure_from_db(str(db_path), payload_post_id)
+
             dispatched_count = len(step_actions)
             if args.use_jev and jev_res is not None:
                 dispatched_count += jev_res.num_actions + len(post_actions)
 
+            phase_label = "co_start" if step < args.costart_steps else "strike"
             exposure_timeline.append(
                 {
                     "step": step + 1,
+                    "phase": phase_label,
                     "baseline_exposure": e_base_t,
                     "payload_exposure": e_pay_t,
                     "net_lift": e_pay_t - e_base_t,
@@ -576,7 +686,7 @@ async def main() -> int:
             )
 
             logger.info(
-                f"Step {step + 1}/{total_steps} completed | "
+                f"Step {step + 1}/{total_steps} [{phase_label}] | "
                 f"Payload Exposure: {e_pay_t:.1f}, Baseline: {e_base_t:.1f}, Lift: {(e_pay_t - e_base_t):.1f}"
             )
 

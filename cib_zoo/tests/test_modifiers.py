@@ -1,6 +1,10 @@
 """Unit tests for temporal and adaptive modifiers."""
 
-from cib_zoo.modifiers import PulsedWaveModifier, ThompsonSamplingBanditModifier
+from cib_zoo.modifiers import (
+    BioScrapingModifier,
+    PulsedWaveModifier,
+    ThompsonSamplingBanditModifier,
+)
 
 
 class TestPulsedWaveModifier:
@@ -75,3 +79,74 @@ class TestThompsonSamplingBanditModifier:
         # Optimal arm should have far more pulls and higher expected value
         assert stats["optimal"]["pulls"] > stats["suboptimal"]["pulls"]
         assert stats["optimal"]["expected_value"] > stats["suboptimal"]["expected_value"]
+
+
+class TestBioScrapingModifier:
+    def test_extract_keywords_from_community_bios(self) -> None:
+        from unittest.mock import MagicMock
+        from oasis.social_platform.config import UserInfo
+
+        agent1 = MagicMock()
+        agent1.user_info = UserInfo(
+            user_name="alice_tech",
+            name="Alice Tech",
+            description="Machine learning engineer working on distributed training and compilers.",
+            profile={"mbti": "INTJ", "user_profile": "Distributed training expert."},
+        )
+        agent2 = MagicMock()
+        agent2.user_info = UserInfo(
+            user_name="bob_sys",
+            name="Bob Sys",
+            description="Rust and Linux systems programmer building high-throughput training engines.",
+            profile={"mbti": "INTP", "user_profile": "Systems and compilers."},
+        )
+
+        modifier = BioScrapingModifier(target_topic="training", keywords_per_bio=3)
+        profile = modifier.scrape_target_community([agent1, agent2])
+
+        assert profile.target_topic == "training"
+        assert len(profile.top_keywords) > 0
+        # Common domain words should appear in top keywords
+        assert any(k in profile.top_keywords for k in ("training", "compilers", "distributed", "systems"))
+        assert "INTJ" in profile.common_mbtis or "INTP" in profile.common_mbtis
+
+    def test_synthesize_chameleon_persona(self) -> None:
+        from cib_zoo.modifiers.bio_scraping import ScrapedDemographicProfile
+
+        profile = ScrapedDemographicProfile(
+            target_topic="crypto",
+            top_keywords=["bitcoin", "ethereum", "defi", "trading"],
+            common_mbtis=["ENTP"],
+            dominant_country="US",
+        )
+
+        modifier = BioScrapingModifier(target_topic="crypto", keywords_per_bio=3)
+        persona = modifier.synthesize_chameleon_persona(bot_id=151, profile=profile)
+
+        assert "chameleon_crypto_0151" in persona.user_name
+        assert "crypto" in persona.description.lower()
+        assert any(k in persona.description for k in ("bitcoin", "ethereum", "defi"))
+        assert persona.profile["mbti"] == "ENTP"
+        assert persona.profile["country"] == "US"
+
+    def test_adapt_squad_personas(self, cib_agent_factory) -> None:
+        from unittest.mock import MagicMock
+        from oasis.social_platform.config import UserInfo
+
+        organic = MagicMock()
+        organic.user_info = UserInfo(
+            user_name="marcus_politics",
+            name="Marcus Policy",
+            description="Senior policy analyst covering federal budget oversight and economic governance.",
+            profile={"mbti": "ISTJ", "user_profile": "Policy analysis and governance."},
+        )
+
+        bots = [cib_agent_factory(agent_id=i) for i in range(101, 104)]
+        modifier = BioScrapingModifier(target_topic="policy")
+        updated = modifier.adapt_squad_personas(squad_bots=bots, candidate_organic_agents=[organic])
+
+        assert len(updated) == 3
+        for bot in bots:
+            assert "chameleon" in bot.user_info.user_name
+            assert "policy" in bot.user_info.description.lower()
+
