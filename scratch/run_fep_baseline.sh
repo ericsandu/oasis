@@ -5,7 +5,6 @@
 #SBATCH --gres=gpu:tesla_a100:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=02:00:00
 #SBATCH --output=slurm_baseline_%j.out
 #SBATCH --error=slurm_baseline_%j.err
 
