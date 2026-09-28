@@ -55,8 +55,11 @@ import shutil
 from cib_zoo.agent.cib_agent import CIBAgent, NoOpModelBackend
 from cib_zoo.metrics.amplification import (
     calculate_causal_amplification,
+    calculate_community_partitioned_exposure,
     calculate_differential_amplification,
+    calculate_dual_bubble_amplification,
     calculate_exposure_from_db,
+    resolve_posts_by_narrative,
 )
 from cib_zoo.modifiers.bio_scraping import BioScrapingModifier
 from cib_zoo.presets import create_s1_campaign, create_s2_campaign, create_s3_campaign
@@ -105,6 +108,67 @@ def make_user_info(agent_id: int, name: str) -> UserInfo:
     )
 
 
+def create_and_register_bots(
+    num_bots: int,
+    num_organic: int,
+    channel: Channel,
+    agent_graph: Any,
+    db_path: Path,
+    community_map: dict[int, str],
+    target_bubble: str = "tech",
+    enable_bio_scraping: bool = False,
+    organic_agents: Optional[list[Any]] = None,
+) -> tuple[dict[int, CIBAgent], list[int]]:
+    """Dynamically instantiate CIB bots and register them in agent graph and SQLite database.
+
+    Called either at simulation start (if warmup requires it) or dynamically at step X - warmup.
+    """
+    bot_agents: dict[int, CIBAgent] = {}
+    bot_ids: list[int] = []
+    if num_bots <= 0:
+        return bot_agents, bot_ids
+
+    bot_start_id = num_organic + 1
+    bot_ids = list(range(bot_start_id, bot_start_id + num_bots))
+    for b_id in bot_ids:
+        bot = CIBAgent(
+            agent_id=b_id,
+            user_info=make_user_info(b_id, f"CIB Squad Bot {b_id}"),
+            channel=channel,
+            max_actions_per_step=5,
+        )
+        agent_graph.add_agent(bot)
+        bot_agents[b_id] = bot
+        community_map[b_id] = target_bubble
+
+    if enable_bio_scraping and organic_agents:
+        bio_mod = BioScrapingModifier()
+        bio_mod.adapt_squad_personas(
+            squad_bots=list(bot_agents.values()),
+            candidate_organic_agents=organic_agents,
+        )
+        logger.info("✓ BioScrapingModifier adapted bot squad to chameleon demographic personas.")
+
+    # Synchronize bot user records into SQLite
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        for bot in bot_agents.values():
+            u = bot.user_info
+            cur.execute(
+                "INSERT OR REPLACE INTO user (user_id, user_name, name, bio) VALUES (?, ?, ?, ?)",
+                (bot.social_agent_id, u.user_name, u.name, u.description),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    logger.info(
+        f"✓ Dynamically created and registered {len(bot_agents)} CIB bots (IDs {bot_ids[0]}..{bot_ids[-1]})."
+    )
+    return bot_agents, bot_ids
+
+
 def compile_campaign_preset(
     preset: str,
     bot_ids: list[int],
@@ -112,12 +176,22 @@ def compile_campaign_preset(
     baseline_post_id: int,
     payload_post_id: int,
     total_campaign_steps: int,
+    warmup_steps: Optional[int] = None,
+    target_tag: str = "#target",
+    target_subbranch: str = "neuromorphic_computing",
 ) -> Any:
     """Compile declarative campaign config for the specified preset."""
     if not bot_ids or preset == "baseline":
         return None
-    warmup_steps = max(1, total_campaign_steps // 2)
-    strike_steps = max(1, total_campaign_steps - warmup_steps)
+    effective_warmup = (
+        max(1, warmup_steps)
+        if warmup_steps is not None
+        else max(1, total_campaign_steps // 2)
+    )
+    strike_steps = max(1, total_campaign_steps - effective_warmup)
+    target_clean_tag = f"#{target_tag.strip('#')}"
+    target_clean_subbranch = f"#{target_subbranch.strip('#')}"
+
     if preset == "s1":
         return create_s1_campaign(
             warmup_bot_ids=bot_ids[: len(bot_ids) // 2 or 1],
@@ -125,8 +199,8 @@ def compile_campaign_preset(
             influencer_ids=[organic_agents[0].social_agent_id],
             anchor_post_id=baseline_post_id,
             payload_post_id=payload_post_id,
-            payload_template="Amplifying payload narrative #target",
-            warmup_steps=warmup_steps,
+            payload_template=f"Breakthrough research in {target_clean_subbranch} hardware architectures {target_clean_tag}",
+            warmup_steps=effective_warmup,
             strike_steps=strike_steps,
         )
     elif preset == "s2":
@@ -134,20 +208,30 @@ def compile_campaign_preset(
             sentinel_bot_ids=[bot_ids[0]],
             strike_bot_ids=bot_ids[1:] if len(bot_ids) > 1 else bot_ids,
             target_post_id=payload_post_id,
-            raid_templates=["Perspective A #target", "Perspective B #target"],
-            discovery_steps=warmup_steps,
+            raid_templates=[
+                f"Scaling benchmarks for {target_clean_subbranch} {target_clean_tag}",
+                f"Comparing {target_clean_subbranch} to conventional GPUs {target_clean_tag}",
+            ],
+            discovery_steps=effective_warmup,
             strike_steps=strike_steps,
         )
     elif preset == "s3":
+        bridge_steps = effective_warmup
+        remaining = max(2, total_campaign_steps - bridge_steps)
+        raid_steps = max(1, remaining // 2)
+        astroturf_steps = max(1, remaining - raid_steps)
         return create_s3_campaign(
             bridge_bot_ids=[bot_ids[0]],
             raid_bot_ids=[bot_ids[1 % len(bot_ids)]],
             astroturf_bot_ids=bot_ids,
             target_influencer_ids=[organic_agents[0].social_agent_id],
             target_post_id=payload_post_id,
-            raid_templates=["Raid commentary #target"],
-            astroturf_hashtag="target",
-            astroturf_template="Astroturf viral broadcast #target",
+            raid_templates=[f"Evaluation of {target_clean_subbranch} deployment models {target_clean_tag}"],
+            astroturf_hashtag=target_tag.strip("#"),
+            astroturf_template=f"Emerging breakthroughs in {target_clean_subbranch} neural processing {target_clean_tag}",
+            bridge_steps=bridge_steps,
+            raid_steps=raid_steps,
+            astroturf_steps=astroturf_steps,
         )
     return None
 
@@ -161,19 +245,47 @@ async def execute_narrative_injection(
     db_path: Path,
     topic_mode: str,
     preset: str,
-    enable_bio_scraping: bool,
+    target_bubble: str = "tech",
+    baseline_tag: str = "#baseline",
+    target_tag: str = "#target",
+    target_subbranch: str = "neuromorphic_computing",
+    community_map: Optional[dict[int, str]] = None,
 ) -> tuple[int, int]:
     """Inject baseline and target narrative posts into the living platform environment."""
+    # Find an organic agent in the target bubble to publish baseline post
+    in_bubble_org = None
+    if community_map:
+        for a in organic_agents:
+            if community_map.get(a.social_agent_id) == target_bubble:
+                in_bubble_org = a
+                break
+    if in_bubble_org is None:
+        in_bubble_org = organic_agents[0]
+
+    baseline_clean_tag = f"#{baseline_tag.strip('#')}"
+    target_clean_tag = f"#{target_tag.strip('#')}"
+    target_clean_subbranch = f"#{target_subbranch.strip('#')}"
+
+    baseline_content = (
+        f"Modern distributed systems and cloud architecture patterns {baseline_clean_tag} #{target_bubble}"
+    )
     injection_actions: dict = {
-        organic_agents[0]: [
-            ManualAction(ActionType.CREATE_POST, {"content": "Organic topic discussion #baseline"})
-        ]
+        in_bubble_org: [ManualAction(ActionType.CREATE_POST, {"content": baseline_content})]
     }
+
     if topic_mode == "existing" or (preset != "baseline" and bot_agents):
-        target_poster = bot_agents[bot_ids[0]] if bot_agents else organic_agents[1]
+        target_poster = (
+            bot_agents[bot_ids[0]]
+            if bot_agents
+            else (organic_agents[1] if len(organic_agents) > 1 else organic_agents[0])
+        )
+        payload_content = (
+            f"Breakthrough in neuromorphic spike-timing neural hardware architecture {target_clean_tag} {target_clean_subbranch}"
+        )
         injection_actions[target_poster] = [
-            ManualAction(ActionType.CREATE_POST, {"content": "Controversial payload narrative #target"})
+            ManualAction(ActionType.CREATE_POST, {"content": payload_content})
         ]
+
     await env.step(injection_actions)
 
     if hasattr(platform, "update_rec_table"):
@@ -183,31 +295,24 @@ async def execute_narrative_injection(
             pass
 
     conn = sqlite3.connect(str(db_path))
-    cur = conn.cursor()
-    cur.execute("SELECT post_id FROM post WHERE content LIKE '%#baseline%' ORDER BY post_id ASC LIMIT 1")
-    row_base = cur.fetchone()
-    base_id = row_base[0] if row_base else 1
-
-    cur.execute("SELECT post_id FROM post WHERE content LIKE '%#target%' ORDER BY post_id ASC LIMIT 1")
-    row_pay = cur.fetchone()
-    pay_id = row_pay[0] if row_pay else (base_id + 1)
-
-    if enable_bio_scraping and bot_agents:
-        bio_mod = BioScrapingModifier()
-        bio_mod.adapt_squad_personas(
-            squad_bots=list(bot_agents.values()),
-            candidate_organic_agents=organic_agents,
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT post_id FROM post WHERE content LIKE ? ORDER BY post_id ASC LIMIT 1",
+            (f"%{baseline_clean_tag}%",),
         )
-        for bot in bot_agents.values():
-            u = bot.user_info
-            cur.execute(
-                "UPDATE user SET user_name=?, name=?, bio=? WHERE user_id=?",
-                (u.user_name, u.name, u.description, bot.social_agent_id),
-            )
-        conn.commit()
-        logger.info("✓ BioScrapingModifier adapted bot squad to chameleon demographic personas.")
+        row_base = cur.fetchone()
+        base_id = row_base[0] if row_base else 1
 
-    conn.close()
+        cur.execute(
+            "SELECT post_id FROM post WHERE content LIKE ? ORDER BY post_id ASC LIMIT 1",
+            (f"%{target_clean_tag}%",),
+        )
+        row_pay = cur.fetchone()
+        pay_id = row_pay[0] if row_pay else (base_id + 1)
+    finally:
+        conn.close()
+
     return base_id, pay_id
 
 
@@ -348,6 +453,36 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable Vector 7 Bio-Scraping Copyattack modifier for bots to adopt chameleon demographic personas.",
     )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=None,
+        help="Number of warmup steps for CIB bots before focal injection step X (bots created at step X - warmup_steps).",
+    )
+    parser.add_argument(
+        "--target-bubble",
+        type=str,
+        default="tech",
+        help="Target community bubble for in-group vs out-of-group evaluation (default: 'tech' for multitopic, or 'progressive' for polarized).",
+    )
+    parser.add_argument(
+        "--target-tag",
+        type=str,
+        default="#target",
+        help="Hashtag/pattern identifying payload narrative posts (default: '#target').",
+    )
+    parser.add_argument(
+        "--baseline-tag",
+        type=str,
+        default="#baseline",
+        help="Hashtag/pattern identifying control baseline posts (default: '#baseline').",
+    )
+    parser.add_argument(
+        "--target-subbranch",
+        type=str,
+        default="neuromorphic_computing",
+        help="Unheralded specialized subbranch pushed by CIB bots (default: 'neuromorphic_computing').",
+    )
     return parser.parse_args()
 
 
@@ -420,33 +555,50 @@ async def main() -> int:
             channel=channel,
         )
 
-        # 3. Instantiate CIB Bots (if preset != baseline)
+        # Synchronize organic user identities and initial social graph into SQLite
+        sync_network_to_db(
+            agents=organic_agents,
+            db_path=str(db_path),
+            community_map=community_map,
+        )
+
+        # Determine warmup duration and dynamic bot creation step
+        step_injection = args.costart_steps
+        if args.preset == "baseline" or num_bots == 0:
+            warmup_steps = 0
+        elif args.warmup_steps is not None:
+            warmup_steps = max(0, min(step_injection, args.warmup_steps))
+        else:
+            if args.preset == "s1":
+                warmup_steps = min(2, step_injection)
+            elif args.preset in ("s2", "s3"):
+                warmup_steps = min(1, step_injection)
+            else:
+                warmup_steps = 0
+
+        step_bot_creation = max(0, step_injection - warmup_steps) if num_bots > 0 else -1
+
         bot_agents: dict[int, CIBAgent] = {}
         bot_ids: list[int] = []
-        if num_bots > 0:
-            bot_start_id = args.num_organic + 1
-            bot_ids = list(range(bot_start_id, bot_start_id + num_bots))
-            for b_id in bot_ids:
-                bot = CIBAgent(
-                    agent_id=b_id,
-                    user_info=make_user_info(b_id, f"CIB Squad Bot {b_id}"),
-                    channel=channel,
-                    max_actions_per_step=5,
-                )
-                agent_graph.add_agent(bot)
-                bot_agents[b_id] = bot
+
+        # If warmup begins at step 0, instantiate bots immediately
+        if num_bots > 0 and step_bot_creation == 0:
+            bot_agents, bot_ids = create_and_register_bots(
+                num_bots=num_bots,
+                num_organic=args.num_organic,
+                channel=channel,
+                agent_graph=agent_graph,
+                db_path=db_path,
+                community_map=community_map,
+                target_bubble=args.target_bubble,
+                enable_bio_scraping=args.enable_bio_scraping,
+                organic_agents=organic_agents,
+            )
 
         logger.info(
             f"Network assembled: {len(organic_agents)} organic agents ({args.topology}) | "
-            f"{CIBAgent.get_instance_count()} CIB bots registered."
-        )
-
-        # Synchronize user identities and initial social graph into SQLite
-        all_sim_agents = organic_agents + list(bot_agents.values())
-        sync_network_to_db(
-            agents=all_sim_agents,
-            db_path=str(db_path),
-            community_map=community_map,
+            f"Target bubble='{args.target_bubble}', Injection step={step_injection}, "
+            f"Bot creation step={step_bot_creation} (Warmup={warmup_steps})."
         )
 
         env = OasisEnv(
@@ -543,7 +695,11 @@ async def main() -> int:
                 db_path=db_path,
                 topic_mode=args.topic_mode,
                 preset=args.preset,
-                enable_bio_scraping=args.enable_bio_scraping,
+                target_bubble=args.target_bubble,
+                baseline_tag=args.baseline_tag,
+                target_tag=args.target_tag,
+                target_subbranch=args.target_subbranch,
+                community_map=community_map,
             )
             campaign = compile_campaign_preset(
                 preset=args.preset,
@@ -552,6 +708,9 @@ async def main() -> int:
                 baseline_post_id=baseline_post_id,
                 payload_post_id=payload_post_id,
                 total_campaign_steps=args.max_steps,
+                warmup_steps=warmup_steps,
+                target_tag=args.target_tag,
+                target_subbranch=args.target_subbranch,
             )
 
         campaign_name = campaign.campaign_name if campaign else f"Preset_{args.preset}"
@@ -563,8 +722,49 @@ async def main() -> int:
         for step in range(start_step, total_steps):
             step_actions: dict = {}
 
+            # Dynamic Bot Creation at step_bot_creation (X - warmup_steps)
+            if num_bots > 0 and not bot_agents and step == step_bot_creation:
+                bot_agents, bot_ids = create_and_register_bots(
+                    num_bots=num_bots,
+                    num_organic=args.num_organic,
+                    channel=channel,
+                    agent_graph=agent_graph,
+                    db_path=db_path,
+                    community_map=community_map,
+                    target_bubble=args.target_bubble,
+                    enable_bio_scraping=args.enable_bio_scraping,
+                    organic_agents=organic_agents,
+                )
+                if step < step_injection:
+                    campaign = compile_campaign_preset(
+                        preset=args.preset,
+                        bot_ids=bot_ids,
+                        organic_agents=organic_agents,
+                        baseline_post_id=baseline_post_id,
+                        payload_post_id=payload_post_id,
+                        total_campaign_steps=total_steps - step_bot_creation,
+                        warmup_steps=warmup_steps,
+                        target_tag=args.target_tag,
+                        target_subbranch=args.target_subbranch,
+                    )
+                    logger.info(
+                        f"✓ Bots activated at step {step + 1} (warmup phase of {warmup_steps} steps before focal injection at step {step_injection + 1})."
+                    )
+
             # Transition step: End of co-start -> Inject focal baseline & target narrative
             if args.costart_steps > 0 and step == args.costart_steps:
+                if num_bots > 0 and not bot_agents:
+                    bot_agents, bot_ids = create_and_register_bots(
+                        num_bots=num_bots,
+                        num_organic=args.num_organic,
+                        channel=channel,
+                        agent_graph=agent_graph,
+                        db_path=db_path,
+                        community_map=community_map,
+                        target_bubble=args.target_bubble,
+                        enable_bio_scraping=args.enable_bio_scraping,
+                        organic_agents=organic_agents,
+                    )
                 baseline_post_id, payload_post_id = await execute_narrative_injection(
                     env=env,
                     platform=platform,
@@ -574,7 +774,11 @@ async def main() -> int:
                     db_path=db_path,
                     topic_mode=args.topic_mode,
                     preset=args.preset,
-                    enable_bio_scraping=args.enable_bio_scraping,
+                    target_bubble=args.target_bubble,
+                    baseline_tag=args.baseline_tag,
+                    target_tag=args.target_tag,
+                    target_subbranch=args.target_subbranch,
+                    community_map=community_map,
                 )
                 campaign = compile_campaign_preset(
                     preset=args.preset,
@@ -582,11 +786,16 @@ async def main() -> int:
                     organic_agents=organic_agents,
                     baseline_post_id=baseline_post_id,
                     payload_post_id=payload_post_id,
-                    total_campaign_steps=args.max_steps,
+                    total_campaign_steps=total_steps - step_bot_creation,
+                    warmup_steps=warmup_steps,
+                    target_tag=args.target_tag,
+                    target_subbranch=args.target_subbranch,
                 )
                 logger.info(
                     f"✓ Injected focal narratives at step {step + 1}: "
-                    f"Baseline ID={baseline_post_id}, Payload ID={payload_post_id}. Campaign '{args.preset}' activated."
+                    f"Baseline ID={baseline_post_id} ({args.baseline_tag}), "
+                    f"Payload ID={payload_post_id} ({args.target_tag} #{args.target_subbranch}). "
+                    f"Campaign '{args.preset}' activated."
                 )
 
             # Sample active organic agents
@@ -600,10 +809,11 @@ async def main() -> int:
                     else:
                         step_actions[org_agent] = [ManualAction(ActionType.DO_NOTHING, {})]
 
-            # Generate CIB actions for active squads (only after co-start phase)
-            if campaign is not None and step >= args.costart_steps:
-                rel_campaign_step = step - args.costart_steps
-                phase, rel_step = campaign.get_active_phase(rel_campaign_step)
+            # Generate CIB actions for active squads (only after bot creation)
+            if campaign is not None and bot_agents and step >= step_bot_creation:
+                rel_campaign_step = step - step_bot_creation
+                bounded_rel_step = min(rel_campaign_step, campaign.total_steps - 1)
+                phase, rel_step = campaign.get_active_phase(bounded_rel_step)
                 for squad in phase.squads:
                     squad_bot_instances = [
                         bot_agents[b_id] for b_id in squad.bot_ids if b_id in bot_agents
@@ -662,12 +872,12 @@ async def main() -> int:
                 shutil.copy(db_path, costart_cache_file)
                 logger.info(f"✓ Cached shared co-start checkpoint database to {costart_cache_file}")
 
-            # Record step exposure telemetry
+            # Record step exposure telemetry (aggregating topic narratives)
             e_base_t = 0.0
             e_pay_t = 0.0
             if step >= args.costart_steps:
-                e_base_t = calculate_exposure_from_db(str(db_path), baseline_post_id)
-                e_pay_t = calculate_exposure_from_db(str(db_path), payload_post_id)
+                e_base_t = calculate_exposure_from_db(str(db_path), f"%{args.baseline_tag}%")
+                e_pay_t = calculate_exposure_from_db(str(db_path), f"%{args.target_tag}%")
 
             dispatched_count = len(step_actions)
             if args.use_jev and jev_res is not None:
@@ -690,26 +900,54 @@ async def main() -> int:
                 f"Payload Exposure: {e_pay_t:.1f}, Baseline: {e_base_t:.1f}, Lift: {(e_pay_t - e_base_t):.1f}"
             )
 
-        # 7. Compute Global Evaluation Metrics
-        e_baseline = calculate_exposure_from_db(str(db_path), baseline_post_id)
-        e_payload = calculate_exposure_from_db(str(db_path), payload_post_id)
+        # 7. Compute Global Evaluation Metrics & Dual In-Bubble vs Out-of-Bubble Breakout
+        e_baseline = calculate_exposure_from_db(str(db_path), f"%{args.baseline_tag}%")
+        e_payload = calculate_exposure_from_db(str(db_path), f"%{args.target_tag}%")
+
+        target_bubble = args.target_bubble
+        in_group_uids = {aid for aid, comm in community_map.items() if comm == target_bubble and aid <= args.num_organic}
+        out_group_uids = {aid for aid, comm in community_map.items() if comm != target_bubble and aid <= args.num_organic}
 
         if num_bots > 0:
             diff_amplification = calculate_differential_amplification(
                 db_path=str(db_path),
-                payload_post_id=payload_post_id,
-                baseline_post_id=baseline_post_id,
+                payload_post_id=f"%{args.target_tag}%",
+                baseline_post_id=f"%{args.baseline_tag}%",
+                n_bots=num_bots,
             )
             ratio_amplification = calculate_causal_amplification(
                 db_path=str(db_path),
-                payload_post_id=payload_post_id,
-                baseline_post_id=baseline_post_id,
+                payload_post_id=f"%{args.target_tag}%",
+                baseline_post_id=f"%{args.baseline_tag}%",
                 n_bots=num_bots,
                 mode="ratio",
+            )
+            dual_stats = calculate_dual_bubble_amplification(
+                db_path=str(db_path),
+                payload_target=f"%{args.target_tag}%",
+                baseline_target=f"%{args.baseline_tag}%",
+                in_group_uids=in_group_uids,
+                out_group_uids=out_group_uids,
+                n_bots=num_bots,
+                n_seed=1,
             )
         else:
             diff_amplification = 0.0
             ratio_amplification = 1.0
+            dual_stats = {
+                "exposure_payload_in": calculate_exposure_from_db(str(db_path), f"%{args.target_tag}%", user_ids=in_group_uids),
+                "exposure_baseline_in": calculate_exposure_from_db(str(db_path), f"%{args.baseline_tag}%", user_ids=in_group_uids),
+                "delta_A_in": 0.0,
+                "ratio_A_in": 1.0,
+                "exposure_payload_out": calculate_exposure_from_db(str(db_path), f"%{args.target_tag}%", user_ids=out_group_uids),
+                "exposure_baseline_out": calculate_exposure_from_db(str(db_path), f"%{args.baseline_tag}%", user_ids=out_group_uids),
+                "delta_A_out": 0.0,
+                "ratio_A_out": 1.0,
+                "exposure_payload_total": e_payload,
+                "exposure_baseline_total": e_baseline,
+                "delta_A_total": 0.0,
+                "ratio_A_total": 1.0,
+            }
 
         # 8. Cross-Community Engagement Breakdown
         conn = sqlite3.connect(str(db_path))
@@ -740,30 +978,39 @@ async def main() -> int:
         else:
             total_bot_actions = 0
 
-        # Community-level breakdown for payload post
+        # Community-level breakdown for payload narrative posts
         community_stats: dict[str, dict[str, int]] = {}
         unique_communities = set(community_map.values())
+        pay_pids = resolve_posts_by_narrative(str(db_path), f"%{args.target_tag}%")
+        if not pay_pids and payload_post_id:
+            pay_pids = [payload_post_id]
+
+        p_placeholders = ",".join("?" for _ in pay_pids) if pay_pids else "0"
+
         for comm in unique_communities:
             members = [aid for aid, c in community_map.items() if c == comm]
             m_placeholders = ",".join("?" for _ in members)
 
-            cur.execute(
-                f"SELECT COUNT(*) FROM like WHERE post_id = ? AND user_id IN ({m_placeholders})",
-                (payload_post_id, *members),
-            )
-            comm_likes = cur.fetchone()[0]
+            if pay_pids and members:
+                cur.execute(
+                    f"SELECT COUNT(*) FROM like WHERE post_id IN ({p_placeholders}) AND user_id IN ({m_placeholders})",
+                    tuple(pay_pids) + tuple(members),
+                )
+                comm_likes = cur.fetchone()[0]
 
-            cur.execute(
-                f"SELECT COUNT(*) FROM comment WHERE post_id = ? AND user_id IN ({m_placeholders})",
-                (payload_post_id, *members),
-            )
-            comm_comments = cur.fetchone()[0]
+                cur.execute(
+                    f"SELECT COUNT(*) FROM comment WHERE post_id IN ({p_placeholders}) AND user_id IN ({m_placeholders})",
+                    tuple(pay_pids) + tuple(members),
+                )
+                comm_comments = cur.fetchone()[0]
 
-            cur.execute(
-                f"SELECT COUNT(*) FROM rec WHERE post_id = ? AND user_id IN ({m_placeholders})",
-                (payload_post_id, *members),
-            )
-            comm_recs = cur.fetchone()[0]
+                cur.execute(
+                    f"SELECT COUNT(*) FROM rec WHERE post_id IN ({p_placeholders}) AND user_id IN ({m_placeholders})",
+                    tuple(pay_pids) + tuple(members),
+                )
+                comm_recs = cur.fetchone()[0]
+            else:
+                comm_likes = comm_comments = comm_recs = 0
 
             community_stats[comm] = {
                 "member_count": len(members),
@@ -780,10 +1027,17 @@ async def main() -> int:
             "campaign_name": campaign_name,
             "topology": args.topology,
             "topic_mode": args.topic_mode,
+            "target_bubble": target_bubble,
+            "target_subbranch": args.target_subbranch,
+            "target_tag": args.target_tag,
+            "baseline_tag": args.baseline_tag,
             "num_organic": args.num_organic,
             "num_bots": num_bots,
             "bot_ratio": num_bots / args.num_organic if args.num_organic > 0 else 0.0,
             "bot_ids": active_bot_ids,
+            "warmup_steps": warmup_steps,
+            "step_bot_creation": step_bot_creation,
+            "costart_steps": args.costart_steps,
             "total_steps": total_steps,
             "baseline_post_id": baseline_post_id,
             "payload_post_id": payload_post_id,
@@ -791,6 +1045,7 @@ async def main() -> int:
             "exposure_payload": e_payload,
             "differential_amplification": diff_amplification,
             "ratio_amplification": ratio_amplification,
+            "dual_bubble_amplification": dual_stats,
             "is_llm_mode": is_llm_mode,
             "use_jev": bool(args.use_jev),
             "model_name": args.model if is_llm_mode else "hermetic_noop",
@@ -814,7 +1069,9 @@ async def main() -> int:
             json.dump(results, f, indent=2)
 
         logger.info(
-            f"Campaign completed! Differential Lift: {diff_amplification:.4f} | "
+            f"Campaign completed! Total Lift ΔA: {dual_stats['delta_A_total']:.4f} | "
+            f"In-Bubble ΔA_in: {dual_stats['delta_A_in']:.4f} | "
+            f"Out-of-Bubble Breakout ΔA_out: {dual_stats['delta_A_out']:.4f} | "
             f"Ratio: {ratio_amplification:.4f} | Total Bot Actions: {total_bot_actions}"
         )
         logger.info(f"Results successfully saved to {output_path}")

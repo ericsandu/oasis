@@ -3,10 +3,13 @@
 import sqlite3
 import pytest
 from cib_zoo.agent.cib_agent import CIBAgent
-from cib_zoo.metrics.amplification import (
+from cib_zoo.metrics import (
     calculate_causal_amplification,
+    calculate_community_partitioned_exposure,
     calculate_differential_amplification,
+    calculate_dual_bubble_amplification,
     calculate_exposure_from_db,
+    resolve_posts_by_narrative,
 )
 
 
@@ -323,5 +326,103 @@ def test_exact_post_trace_matching_no_substring_collision(tmp_path):
     assert exp1 == 1.5, f"Expected 1.5, got {exp1} (spurious substring match detected!)"
     assert exp2 == 1.5, f"Expected 1.5, got {exp2} (spurious substring match detected!)"
     assert exp1 == exp2
+
+
+def test_resolve_posts_by_narrative(tmp_path):
+    """Verify narrative resolution for single IDs, collections, and hashtag search patterns."""
+    db_file = tmp_path / "test_resolve.db"
+    _init_test_db(str(db_file))
+
+    conn = sqlite3.connect(str(db_file))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO post VALUES (10, 1, 'Distributed cloud #baseline', '0')")
+    cur.execute("INSERT INTO post VALUES (20, 2, 'Neuromorphic spike computing #target #neuromorphic', '0')")
+    cur.execute("INSERT INTO post VALUES (21, 2, 'Analog memristor chips #target #neuromorphic', '0')")
+    cur.execute("INSERT INTO post VALUES (30, 3, 'Unrelated sports news', '0')")
+    conn.commit()
+    conn.close()
+
+    # Direct integer and set resolution
+    assert resolve_posts_by_narrative(str(db_file), 10) == [10]
+    assert resolve_posts_by_narrative(str(db_file), [20, 21]) == [20, 21]
+
+    # Tag search pattern resolution
+    assert resolve_posts_by_narrative(str(db_file), "%#baseline%") == [10]
+    assert resolve_posts_by_narrative(str(db_file), "%#target%") == [20, 21]
+    assert resolve_posts_by_narrative(str(db_file), "#neuromorphic") == [20, 21]
+    assert resolve_posts_by_narrative(str(db_file), "%#nonexistent%") == []
+
+
+def test_dual_bubble_amplification_metrics(tmp_path):
+    """Verify in-bubble vs out-of-bubble partitioned exposure and causal amplification."""
+    db_file = tmp_path / "test_dual_bubble.db"
+    _init_test_db(str(db_file))
+
+    conn = sqlite3.connect(str(db_file))
+    cur = conn.cursor()
+
+    # Baseline post 100: Tech community discussion
+    cur.execute("INSERT INTO post VALUES (100, 1, 'Mainstream cloud post #baseline', '0')")
+    # In-group tech users (1..5) engage with baseline post: 5 recs, 2 likes
+    for u in [1, 2, 3, 4, 5]:
+        cur.execute("INSERT INTO rec (user_id, post_id, created_at) VALUES (?, 100, '0')", (u,))
+    for u in [1, 2]:
+        cur.execute("INSERT INTO like (user_id, post_id, created_at) VALUES (?, 100, '0')", (u,))
+
+    # Payload post 200: Neuromorphic tech post
+    cur.execute("INSERT INTO post VALUES (200, 2, 'Neuromorphic computing #target #neuromorphic', '0')")
+    # In-group tech users (1..5) engage heavily: 5 recs, 5 likes, 3 comments
+    for u in [1, 2, 3, 4, 5]:
+        cur.execute("INSERT INTO rec (user_id, post_id, created_at) VALUES (?, 200, '0')", (u,))
+        cur.execute("INSERT INTO like (user_id, post_id, created_at) VALUES (?, 200, '0')", (u,))
+    for u in [1, 2, 3]:
+        cur.execute("INSERT INTO comment (user_id, post_id, content, created_at) VALUES (?, 200, 'Great', '0')", (u,))
+
+    # Out-group sports/politics users (10..15): 2 recs, 1 like on payload post 200 (cross-bubble breakout)
+    for u in [10, 11]:
+        cur.execute("INSERT INTO rec (user_id, post_id, created_at) VALUES (?, 200, '0')", (u,))
+    cur.execute("INSERT INTO like (user_id, post_id, created_at) VALUES (10, 200, '0')")
+
+    conn.commit()
+    conn.close()
+
+    in_group_uids = {1, 2, 3, 4, 5}
+    out_group_uids = {10, 11, 12, 13, 14, 15}
+
+    # 1. Partitioned exposure check
+    base_parts = calculate_community_partitioned_exposure(str(db_file), 100, in_group_uids, out_group_uids)
+    # Baseline in-group: base reach 1.0 + (5 recs * 2.0 = 10) + (2 likes * 1.5 = 3) = 14.0
+    assert pytest.approx(base_parts["in_bubble"], 0.01) == 14.0
+    # Baseline out-group: base reach 1.0 + 0 recs/likes = 1.0
+    assert pytest.approx(base_parts["out_bubble"], 0.01) == 1.0
+    # Total baseline: 1.0 + 10 + 3 = 14.0
+    assert pytest.approx(base_parts["total"], 0.01) == 14.0
+
+    pay_parts = calculate_community_partitioned_exposure(str(db_file), 200, in_group_uids, out_group_uids)
+    # Payload in-group: base 1.0 + (5*2=10) + (5*1.5=7.5) + (3*2=6) = 24.5
+    assert pytest.approx(pay_parts["in_bubble"], 0.01) == 24.5
+    # Payload out-group: base 1.0 + (2 recs * 2 = 4) + (1 like * 1.5 = 1.5) = 6.5
+    assert pytest.approx(pay_parts["out_bubble"], 0.01) == 6.5
+
+    # 2. Dual-bubble amplification statistics with 4 bots
+    stats = calculate_dual_bubble_amplification(
+        db_path=str(db_file),
+        payload_target=200,
+        baseline_target=100,
+        in_group_uids=in_group_uids,
+        out_group_uids=out_group_uids,
+        n_bots=4,
+        n_seed=1,
+    )
+
+    # In-bubble lift: (24.5 - 14.0) / 4 = 10.5 / 4 = 2.625
+    assert pytest.approx(stats["delta_A_in"], 0.01) == 2.625
+    # Out-of-bubble breakout lift: (6.5 - 1.0) / 4 = 5.5 / 4 = 1.375
+    assert pytest.approx(stats["delta_A_out"], 0.01) == 1.375
+    # Both lifts must be strictly positive
+    assert stats["delta_A_in"] > 0.0
+    assert stats["delta_A_out"] > 0.0
+    assert stats["delta_A_total"] > 0.0
+
 
 
