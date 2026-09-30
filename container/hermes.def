@@ -3,20 +3,22 @@ From: ubuntu:24.04
 
 %labels
     Maintainer CIB-Propagation & Nous Research Hermes Integration
-    Version 1.0.0
+    Version 1.0.1
     Description Lightweight Standalone Hermes Agent Container (Qwen 3.8-27B vLLM, Web Search, MCP, Discord Gateway)
 
 %environment
     export LC_ALL=C.UTF-8
     export LANG=C.UTF-8
     export HERMES_HOME=/etc/hermes
-    export PATH=/opt/hermes-agent/bin:/root/.local/bin:/usr/local/bin:$PATH
+    export PATH=/opt/hermes-agent/.hermes/bin:/opt/hermes-agent/bin:/root/.local/bin:/usr/local/bin:$PATH
     export VLLM_BASE_URL=${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}
     export HERMES_MODEL=${HERMES_MODEL:-Qwen/Qwen3.8-27B}
 
 %post
     export DEBIAN_FRONTEND=noninteractive
     export UV_NO_CONFIG=1
+    export PIP_BREAK_SYSTEM_PACKAGES=1
+    export UV_BREAK_SYSTEM_PACKAGES=1
 
     # 1. Essential minimal utilities (no X11/audio/multimedia)
     apt-get update && apt-get install -y --no-install-recommends \
@@ -46,15 +48,20 @@ From: ubuntu:24.04
         --dir /opt/hermes-agent \
         --hermes-home /etc/hermes
 
-    # Ensure symlinks for hermes binary
-    if [ -f /opt/hermes-agent/bin/hermes ]; then
+    # Ensure symlinks for hermes binary across all possible publication slots
+    if [ -f /root/.local/bin/hermes ]; then
+        ln -sf /root/.local/bin/hermes /usr/local/bin/hermes
+    elif [ -f /opt/hermes-agent/.hermes/bin/hermes ]; then
+        ln -sf /opt/hermes-agent/.hermes/bin/hermes /usr/local/bin/hermes
+    elif [ -f /opt/hermes-agent/bin/hermes ]; then
         ln -sf /opt/hermes-agent/bin/hermes /usr/local/bin/hermes
     elif [ -f /etc/hermes/hermes-agent/bin/hermes ]; then
         ln -sf /etc/hermes/hermes-agent/bin/hermes /usr/local/bin/hermes
     fi
+    chmod +x /usr/local/bin/hermes 2>/dev/null || true
 
-    # 4. Install search, documentation MCP utilities, and discord webhook dependencies
-    uv pip install --system \
+    # 4. Install search, documentation MCP utilities, and discord webhook dependencies in system Python
+    uv pip install --system --break-system-packages \
         duckduckgo-search \
         mcp \
         httpx \

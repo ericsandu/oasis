@@ -91,6 +91,13 @@ build_image() {
     local sif_file="$2"
     local image_name="$3"
 
+    if [ -f "${sif_file}" ] && [ "${FORCE_REBUILD:-0}" != "1" ]; then
+        local size=$(du -h "${sif_file}" | cut -f1)
+        echo ""
+        echo "[*] ${sif_file} already exists (${size}). Skipping build (set FORCE_REBUILD=1 to rebuild)."
+        return 0
+    fi
+
     echo ""
     echo "--------------------------------------------------------------------"
     echo "[+] Building ${image_name} (${sif_file}) from ${def_file}..."

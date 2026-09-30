@@ -3,18 +3,20 @@ From: oasis_base.sif
 
 %labels
     Maintainer CIB-Propagation Team
-    Version 1.0.0
+    Version 1.0.1
     Description Composite OASIS Simulation Container Layered with Lightweight Hermes Agent & Diagnostic Gateway
 
 %environment
     export HERMES_HOME=/etc/hermes
-    export PATH=/opt/hermes-agent/bin:/root/.local/bin:/usr/local/bin:$PATH
+    export PATH=/opt/hermes-agent/.hermes/bin:/opt/hermes-agent/bin:/root/.local/bin:/usr/local/bin:$PATH
     export VLLM_BASE_URL=${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}
     export HERMES_MODEL=${HERMES_MODEL:-Qwen/Qwen3.8-27B}
 
 %post
     export DEBIAN_FRONTEND=noninteractive
     export UV_NO_CONFIG=1
+    export PIP_BREAK_SYSTEM_PACKAGES=1
+    export UV_BREAK_SYSTEM_PACKAGES=1
 
     echo "Layering Hermes Agent on top of OASIS base container..."
 
@@ -31,15 +33,20 @@ From: oasis_base.sif
         --dir /opt/hermes-agent \
         --hermes-home /etc/hermes
 
-    # Symlink hermes binary
-    if [ -f /opt/hermes-agent/bin/hermes ]; then
+    # Ensure symlinks for hermes binary across all possible publication slots
+    if [ -f /root/.local/bin/hermes ]; then
+        ln -sf /root/.local/bin/hermes /usr/local/bin/hermes
+    elif [ -f /opt/hermes-agent/.hermes/bin/hermes ]; then
+        ln -sf /opt/hermes-agent/.hermes/bin/hermes /usr/local/bin/hermes
+    elif [ -f /opt/hermes-agent/bin/hermes ]; then
         ln -sf /opt/hermes-agent/bin/hermes /usr/local/bin/hermes
     elif [ -f /etc/hermes/hermes-agent/bin/hermes ]; then
         ln -sf /etc/hermes/hermes-agent/bin/hermes /usr/local/bin/hermes
     fi
+    chmod +x /usr/local/bin/hermes 2>/dev/null || true
 
     # 3. Install search, documentation MCP utilities, and discord webhook packages
-    uv pip install --system \
+    uv pip install --system --break-system-packages \
         duckduckgo-search \
         mcp \
         httpx \
