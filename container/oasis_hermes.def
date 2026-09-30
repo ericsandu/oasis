@@ -1,0 +1,84 @@
+Bootstrap: localimage
+From: oasis_base.sif
+
+%labels
+    Maintainer CIB-Propagation Team
+    Version 1.0.0
+    Description Composite OASIS Simulation Container Layered with Lightweight Hermes Agent & Diagnostic Gateway
+
+%environment
+    export HERMES_HOME=/etc/hermes
+    export PATH=/opt/hermes-agent/bin:/root/.local/bin:/usr/local/bin:$PATH
+    export VLLM_BASE_URL=${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}
+    export HERMES_MODEL=${HERMES_MODEL:-Qwen/Qwen3.8-27B}
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export UV_NO_CONFIG=1
+
+    echo "Layering Hermes Agent on top of OASIS base container..."
+
+    # 1. Install uv for fast deterministic execution
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # 2. Install Hermes Agent lightweight (--skip-browser, --skip-computer-use)
+    mkdir -p /opt/hermes-agent /etc/hermes/logs /etc/hermes/skills
+    curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- \
+        --non-interactive \
+        --skip-browser \
+        --skip-computer-use \
+        --dir /opt/hermes-agent \
+        --hermes-home /etc/hermes
+
+    # Symlink hermes binary
+    if [ -f /opt/hermes-agent/bin/hermes ]; then
+        ln -sf /opt/hermes-agent/bin/hermes /usr/local/bin/hermes
+    elif [ -f /etc/hermes/hermes-agent/bin/hermes ]; then
+        ln -sf /etc/hermes/hermes-agent/bin/hermes /usr/local/bin/hermes
+    fi
+
+    # 3. Install search, documentation MCP utilities, and discord webhook packages
+    pip3 install --no-cache-dir --break-system-packages \
+        duckduckgo-search \
+        mcp \
+        httpx \
+        requests \
+        pyyaml
+
+    # 4. Default configuration connecting to local vLLM serving Qwen 3.8 27B
+    cat << 'EOF' > /etc/hermes/config.yaml
+model:
+  provider: openai
+  default: "qwen-vllm"
+  base_url: "http://127.0.0.1:8000/v1"
+  api_key: "EMPTY"
+  model_name: "Qwen/Qwen3.8-27B"
+  context_length: 262144
+  max_tokens: 8192
+  temperature: 0.2
+
+terminal:
+  backend: local
+
+tools:
+  terminal: true
+  web_search: true
+  code_search: true
+  browser: false
+  computer_use: false
+
+search:
+  provider: duckduckgo
+
+logging:
+  level: INFO
+EOF
+
+%runscript
+    # If run without arguments, drop into interactive hermes shell. Otherwise run command.
+    if [ $# -eq 0 ]; then
+        exec hermes
+    else
+        exec "$@"
+    fi

@@ -1,0 +1,102 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%labels
+    Maintainer CIB-Propagation & Nous Research Hermes Integration
+    Version 1.0.0
+    Description Lightweight Standalone Hermes Agent Container (Qwen 3.8-27B vLLM, Web Search, MCP, Discord Gateway)
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    export HERMES_HOME=/etc/hermes
+    export PATH=/opt/hermes-agent/bin:/root/.local/bin:/usr/local/bin:$PATH
+    export VLLM_BASE_URL=${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}
+    export HERMES_MODEL=${HERMES_MODEL:-Qwen/Qwen3.8-27B}
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export UV_NO_CONFIG=1
+
+    # 1. Essential minimal utilities (no X11/audio/multimedia)
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        wget \
+        git \
+        jq \
+        ripgrep \
+        python3 \
+        python3-pip \
+        python3-dev \
+        python3-venv \
+        build-essential \
+        && rm -rf /var/lib/apt/lists/*
+
+    # 2. Install Astral uv for fast deterministic environment management
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # 3. Install Hermes Agent lightweight (--skip-browser, --skip-computer-use, no multimedia/tts)
+    mkdir -p /opt/hermes-agent /etc/hermes/logs /etc/hermes/skills
+    curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- \
+        --non-interactive \
+        --skip-browser \
+        --skip-computer-use \
+        --dir /opt/hermes-agent \
+        --hermes-home /etc/hermes
+
+    # Ensure symlinks for hermes binary
+    if [ -f /opt/hermes-agent/bin/hermes ]; then
+        ln -sf /opt/hermes-agent/bin/hermes /usr/local/bin/hermes
+    elif [ -f /etc/hermes/hermes-agent/bin/hermes ]; then
+        ln -sf /etc/hermes/hermes-agent/bin/hermes /usr/local/bin/hermes
+    fi
+
+    # 4. Install search, documentation MCP utilities, and discord webhook dependencies
+    pip3 install --no-cache-dir --break-system-packages \
+        duckduckgo-search \
+        mcp \
+        httpx \
+        requests \
+        pyyaml
+
+    # 5. Default configuration for local vLLM serving Qwen 3.8 27B (256K context)
+    cat << 'EOF' > /etc/hermes/config.yaml
+model:
+  provider: openai
+  default: "qwen-vllm"
+  base_url: "http://127.0.0.1:8000/v1"
+  api_key: "EMPTY"
+  model_name: "Qwen/Qwen3.8-27B"
+  context_length: 262144
+  max_tokens: 8192
+  temperature: 0.2
+
+terminal:
+  backend: local
+
+tools:
+  terminal: true
+  web_search: true
+  code_search: true
+  browser: false
+  computer_use: false
+
+search:
+  provider: duckduckgo
+
+logging:
+  level: INFO
+EOF
+
+    # 6. Create standard workspace mount points
+    mkdir -p /workspace /app /data /experiments
+
+%runscript
+    # If arguments provided, run headless query (oneshot); otherwise launch interactive CLI
+    if [ $# -gt 0 ]; then
+        exec hermes chat --oneshot -q "$*"
+    else
+        exec hermes
+    fi

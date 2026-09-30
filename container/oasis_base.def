@@ -1,0 +1,61 @@
+Bootstrap: docker
+From: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
+
+%labels
+    Maintainer CAMEL-AI & CIB-Propagation Team
+    Version 1.1.0
+    Description OASIS Base Simulation Container with vLLM, Gorse, and Poetry on Ubuntu 24.04
+
+%files
+    pyproject.toml /app/pyproject.toml
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    export PATH=/usr/local/bin:$PATH
+    export PYTHONPATH=/app:$PYTHONPATH
+    export PIP_BREAK_SYSTEM_PACKAGES=1
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_BREAK_SYSTEM_PACKAGES=1
+
+    # 1. Bare minimum system dependencies via apt
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libcairo2-dev \
+        pkg-config \
+        python3 \
+        python3-pip \
+        python3-dev \
+        wget \
+        unzip \
+        curl \
+        git \
+        jq \
+        ripgrep \
+        && rm -rf /var/lib/apt/lists/*
+
+    # 2. Install Gorse binary
+    echo "Installing Gorse binary..."
+    wget -q https://github.com/gorse-io/gorse/releases/download/v0.5.11/gorse_linux_amd64.zip
+    unzip gorse_linux_amd64.zip -d /tmp/gorse
+    mv /tmp/gorse/gorse-in-one /usr/local/bin/
+    chmod +x /usr/local/bin/gorse-in-one
+    rm -rf /tmp/gorse gorse_linux_amd64.zip
+
+    # 3. Install Poetry, PyTorch, and vLLM
+    echo "Installing Poetry, PyTorch, and vLLM..."
+    pip install --no-cache-dir poetry torch torchvision torchaudio vllm
+
+    # 4. Install OASIS dependencies via Poetry globally inside container
+    echo "Installing OASIS dependencies via Poetry..."
+    cd /app
+    poetry config virtualenvs.create false
+    poetry install --no-root --no-interaction --no-ansi
+
+    # 5. Create container mount points
+    mkdir -p /app /models /data /experiments /workspace
+
+%runscript
+    exec "$@"

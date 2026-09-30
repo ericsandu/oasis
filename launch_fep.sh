@@ -65,4 +65,21 @@ else
         --output-json "${OUTPUT_JSON}"
 fi
 
-echo "[FEP Launcher] Execution completed successfully at $(date)"
+# ==============================================================================
+# Hermes Autonomous Diagnostic Gateway & Discord Webhook Notification
+# ==============================================================================
+SIM_EXIT_CODE=$?
+if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
+    echo "[FEP Launcher] Triggering Hermes Autonomous Diagnostic Gateway..."
+    LOG_FILE="cib_fep_${SLURM_JOB_ID:-manual}.log"
+    python3 scripts/hermes_diagnostic_gateway.py \
+        --results-json "${OUTPUT_JSON}" \
+        --log-file "${LOG_FILE}" \
+        --db-path "twitter_simulation.db" \
+        --webhook-url "${DISCORD_WEBHOOK_URL}" \
+        --vllm-url "${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}" \
+        --model "${HERMES_MODEL:-Qwen/Qwen3.8-27B}" || true
+fi
+
+echo "[FEP Launcher] Execution completed at $(date) (exit code: ${SIM_EXIT_CODE})"
+exit ${SIM_EXIT_CODE}
