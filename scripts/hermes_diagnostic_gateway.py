@@ -280,9 +280,12 @@ def query_hermes_cli(
         if base_url:
             env["OPENAI_BASE_URL"] = base_url
             env["VLLM_BASE_URL"] = base_url
+            env["OPENAI_API_BASE"] = base_url
         if model:
             env["HERMES_MODEL"] = model
             env["OPENAI_MODEL_NAME"] = model
+        env["OPENAI_API_KEY"] = env.get("OPENAI_API_KEY", "EMPTY")
+        env["HERMES_HOME"] = os.getenv("HERMES_HOME", "/etc/hermes")
         res = subprocess.run(
             [hermes_bin, "chat", "--oneshot", "-q", prompt],
             capture_output=True,

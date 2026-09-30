@@ -185,8 +185,94 @@ echo "Discovered Container Images:"
 echo "  - hermes.sif       : ${HERMES_SIF:-[NOT FOUND - build with: sbatch build_images_slurm.sh hermes]}"
 echo "  - oasis_hermes.sif : ${OASIS_HERMES_SIF:-[NOT FOUND - build with: sbatch build_images_slurm.sh composite]}"
 
+# ==============================================================================
+# Isolated & Persistent Writable Hermes Workspace
+# Prevents Errno 30 Read-only filesystem errors from SquashFS Apptainer containers
+# ==============================================================================
+HERMES_BASE_CACHE="${OASIS_DIR}/.hermes_workspace/template"
+JOB_SEED="${SLURM_JOB_ID:-$$}"
+HERMES_WORKSPACE="${OASIS_DIR}/.hermes_workspace/job_${JOB_SEED}"
+mkdir -p "${HERMES_BASE_CACHE}/logs" "${HERMES_BASE_CACHE}/skills" "${HERMES_BASE_CACHE}/installs"
+mkdir -p "${HERMES_WORKSPACE}/logs" "${HERMES_WORKSPACE}/skills" "${HERMES_WORKSPACE}/installs"
+
+# Seed base cache from SIF image if installs directory is missing or empty
+INIT_SIF="${HERMES_SIF:-${OASIS_HERMES_SIF}}"
+if [ ! -d "${HERMES_BASE_CACHE}/installs" ] || [ -z "$(ls -A "${HERMES_BASE_CACHE}/installs" 2>/dev/null)" ]; then
+    if [ -n "${INIT_SIF}" ] && [ -f "${INIT_SIF}" ] && command -v apptainer &> /dev/null; then
+        echo "[+] Seeding Hermes runtime cache from ${INIT_SIF}:/etc/hermes to ${HERMES_BASE_CACHE}..."
+        apptainer exec --bind "${OASIS_DIR}:${OASIS_DIR}" "${INIT_SIF}" cp -a /etc/hermes/. "${HERMES_BASE_CACHE}/" 2>/dev/null || true
+    fi
+fi
+
+# Populate job-specific workspace from base cache
+cp -a "${HERMES_BASE_CACHE}/." "${HERMES_WORKSPACE}/" 2>/dev/null || true
+
+# Purge any stale lock/marker files left over from container builds or aborted runs
+find "${HERMES_WORKSPACE}" -name "*.lock" -type f -delete 2>/dev/null || true
+find "${HERMES_WORKSPACE}" -name "*completion*" -type f -delete 2>/dev/null || true
+find "${HERMES_WORKSPACE}" -name "*in-progress*" -type f -delete 2>/dev/null || true
+find "${HERMES_BASE_CACHE}" -name "*.lock" -type f -delete 2>/dev/null || true
+chmod -R u+rwX "${HERMES_WORKSPACE}" "${HERMES_BASE_CACHE}" 2>/dev/null || true
+
+# Symlink active workspace to .hermes_workspace/current for inspection
+mkdir -p "${OASIS_DIR}/.hermes_workspace"
+ln -sfn "${HERMES_WORKSPACE}" "${OASIS_DIR}/.hermes_workspace/current" 2>/dev/null || true
+
+sync_hermes_config() {
+    local target_url="$1"
+    local target_model="$2"
+    cat << EOF > "${HERMES_WORKSPACE}/config.yaml"
+model:
+  provider: openai
+  default: "qwen-vllm"
+  base_url: "${target_url}"
+  api_key: "EMPTY"
+  model_name: "${target_model}"
+  context_length: 262144
+  temperature: 0.2
+
+terminal:
+  backend: local
+
+tools:
+  terminal: true
+  web_search: true
+  code_search: true
+  browser: false
+  computer_use: false
+
+search:
+  provider: duckduckgo
+
+logging:
+  level: INFO
+EOF
+    if [ -n "$HOME" ] && [ -d "$HOME" ]; then
+        mkdir -p "$HOME/.hermes" 2>/dev/null || true
+        cp -f "${HERMES_WORKSPACE}/config.yaml" "$HOME/.hermes/config.yaml" 2>/dev/null || true
+    fi
+}
+
+sync_hermes_config "${VLLM_URL}" "${MODEL_IDENTIFIER}"
+
+# Export environment variables universally for host and container
+export HERMES_HOME="/etc/hermes"
+export APPTAINERENV_HERMES_HOME="/etc/hermes"
+export SINGULARITYENV_HERMES_HOME="/etc/hermes"
+export HERMES_WORKSPACE="${HERMES_WORKSPACE}"
+export APPTAINERENV_HERMES_WORKSPACE="${HERMES_WORKSPACE}"
+export SINGULARITYENV_HERMES_WORKSPACE="${HERMES_WORKSPACE}"
+
 # Build Apptainer Bind Arguments
 CONTAINER_BINDS=("--bind" "${OASIS_DIR}:/app" "--bind" "${OASIS_DIR}:${OASIS_DIR}")
+
+# Mount isolated writable Hermes workspace over /etc/hermes
+if [ -d "${HERMES_WORKSPACE}" ]; then
+    CONTAINER_BINDS+=(
+        "--bind" "${HERMES_WORKSPACE}:/etc/hermes"
+        "--bind" "${HERMES_WORKSPACE}:${HERMES_WORKSPACE}"
+    )
+fi
 
 if [ -d "${BATCH_DIR}" ]; then
     CONTAINER_BINDS+=("--bind" "${BATCH_DIR}:/workspace/batch" "--bind" "${BATCH_DIR}:${BATCH_DIR}")
@@ -220,9 +306,16 @@ cleanup() {
         echo "Shutting down dedicated vLLM server (PID: ${VLLM_PID})..."
         kill -9 "${VLLM_PID}" 2>/dev/null || true
         pkill -9 -u "$USER" -f "vllm.entrypoints" 2>/dev/null || true
-        echo "Finished at: $(date)"
-        echo "===================================================================="
     fi
+    # Archive Hermes logs from this run if present
+    if [ -d "${HERMES_WORKSPACE}/logs" ] && [ -n "$(ls -A "${HERMES_WORKSPACE}/logs" 2>/dev/null)" ]; then
+        mkdir -p "${OASIS_DIR}/logs/hermes_audit_${JOB_SEED}" 2>/dev/null || true
+        cp -r "${HERMES_WORKSPACE}/logs/." "${OASIS_DIR}/logs/hermes_audit_${JOB_SEED}/" 2>/dev/null || true
+    fi
+    # Cleanup temporary per-job workspace
+    rm -rf "${HERMES_WORKSPACE}" 2>/dev/null || true
+    echo "Finished at: $(date)"
+    echo "===================================================================="
 }
 trap cleanup EXIT INT TERM
 
@@ -275,7 +368,9 @@ else
             fi
 
             VLLM_URL="http://127.0.0.1:${VLLM_PORT}/v1"
-            VLLM_LOG="${OASIS_DIR}/vllm_hermes_audit.log"
+            sync_hermes_config "${VLLM_URL}" "${MODEL_IDENTIFIER}"
+            VLLM_LOG="${OASIS_DIR}/vllm_hermes_audit_${JOB_SEED}.log"
+            ln -sf "${VLLM_LOG}" "${OASIS_DIR}/vllm_hermes_audit.log" 2>/dev/null || true
             pkill -9 -u "$USER" -f "vllm.entrypoints" 2>/dev/null || true
             sleep 1
 
@@ -292,6 +387,11 @@ else
             export SINGULARITYENV_TRANSFORMERS_OFFLINE=1
             export SINGULARITYENV_VLLM_NO_USAGE_STATS=1
             export SINGULARITYENV_PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
+            # Avoid vLLM warning on client-side VLLM_BASE_URL
+            unset VLLM_BASE_URL 2>/dev/null || true
+            unset APPTAINERENV_VLLM_BASE_URL 2>/dev/null || true
+            unset SINGULARITYENV_VLLM_BASE_URL 2>/dev/null || true
 
             echo "[+] Starting background vLLM server inside ${VLLM_SIF} on port ${VLLM_PORT}..."
             apptainer exec --nv \
@@ -388,19 +488,27 @@ if [ "${TEST_MODE}" = "1" ] || [ "${TEST_MODE}" = "all" ]; then
     else
         echo "[+] Executing inside ${HERMES_SIF}..."
         if [ "${VLLM_HEALTHY}" -eq 1 ]; then
+            echo "[+] Initializing Hermes package manager runtime..."
+            run_hermes_cli hermes pm repair 2>/dev/null || true
+
             echo "[+] Querying Hermes Agent CLI with live model at ${VLLM_URL}..."
-            run_hermes_cli env \
+            if run_hermes_cli env \
                 OPENAI_BASE_URL="${VLLM_URL}" \
-                VLLM_BASE_URL="${VLLM_URL}" \
-                HERMES_MODEL="Qwen/Qwen3.8-27B" \
+                OPENAI_API_BASE="${VLLM_URL}" \
+                OPENAI_API_KEY="EMPTY" \
+                HERMES_MODEL="${MODEL_IDENTIFIER}" \
                 HERMES_YOLO_MODE=1 \
-                hermes chat --oneshot -q "Identify yourself, confirm your role as forensic simulation auditor, and summarize the primary objective of CIB propagation research in 2 sentences."
+                hermes chat --oneshot -q "Identify yourself, confirm your role as forensic simulation auditor, and summarize the primary objective of CIB propagation research in 2 sentences."; then
+                echo "✓ TEST 1 Complete."
+            else
+                echo "[-] TEST 1: Hermes CLI encountered non-zero return code (see diagnostic above)."
+            fi
         else
             echo "Testing container binary availability (dry mode):"
             run_hermes_cli which hermes || true
             run_hermes_cli python3 -c "import sys; print('Python in container:', sys.executable)"
+            echo "✓ TEST 1 Complete."
         fi
-        echo "✓ TEST 1 Complete."
     fi
     echo ""
 fi
@@ -443,8 +551,11 @@ if [ "${TEST_MODE}" = "2" ] || [ "${TEST_MODE}" = "all" ]; then
             GATEWAY_ARGS+=("--dry-run")
         fi
 
-        run_gateway "${GATEWAY_ARGS[@]}"
-        echo "✓ TEST 2 Complete."
+        if run_gateway "${GATEWAY_ARGS[@]}"; then
+            echo "✓ TEST 2 Complete."
+        else
+            echo "[-] TEST 2: Gateway execution encountered an issue."
+        fi
     fi
     echo ""
 fi
@@ -468,8 +579,11 @@ if [ "${TEST_MODE}" = "3" ] || [ "${TEST_MODE}" = "all" ]; then
         GATEWAY_ARGS+=("--dry-run")
     fi
 
-    run_gateway "${GATEWAY_ARGS[@]}"
-    echo "✓ TEST 3 Complete."
+    if run_gateway "${GATEWAY_ARGS[@]}"; then
+        echo "✓ TEST 3 Complete."
+    else
+        echo "[-] TEST 3: Gateway execution encountered an issue."
+    fi
     echo ""
 fi
 

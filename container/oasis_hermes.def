@@ -7,7 +7,7 @@ From: oasis_base.sif
     Description Composite OASIS Simulation Container Layered with Lightweight Hermes Agent & Diagnostic Gateway
 
 %environment
-    export HERMES_HOME=/etc/hermes
+    export HERMES_HOME=${HERMES_HOME:-/etc/hermes}
     export PATH=/opt/hermes-agent/.hermes/bin:/opt/hermes-agent/bin:/root/.local/bin:/usr/local/bin:$PATH
     export VLLM_BASE_URL=${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}
     export HERMES_MODEL=${HERMES_MODEL:-Qwen/Qwen3.8-27B}
@@ -91,6 +91,12 @@ search:
 logging:
   level: INFO
 EOF
+
+    # 5. Clean up any leftover locks or in-progress markers from installer
+    find /etc/hermes -name "*.lock" -type f -delete 2>/dev/null || true
+    find /etc/hermes -name "*completion*" -type f -delete 2>/dev/null || true
+    find /etc/hermes -name "*in-progress*" -type f -delete 2>/dev/null || true
+    chmod -R 777 /etc/hermes 2>/dev/null || true
 
 %runscript
     # If run without arguments, drop into interactive hermes shell. Otherwise run command.

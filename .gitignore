@@ -107,3 +107,4 @@ gorse*
 cib_results.json
 baseline_*/
 batch_*/
+.hermes_workspace/
