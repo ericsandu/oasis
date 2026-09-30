@@ -263,7 +263,11 @@ def extract_batch_forensics(batch_dir_path: str) -> dict[str, Any]:
     }
 
 
-def query_hermes_cli(prompt: str) -> str | None:
+def query_hermes_cli(
+    prompt: str,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> str | None:
     """Attempt diagnosis via Hermes Agent CLI in headless oneshot mode."""
     hermes_bin = shutil.which("hermes")
     if not hermes_bin:
@@ -273,6 +277,12 @@ def query_hermes_cli(prompt: str) -> str | None:
         logger.info("Invoking Hermes Agent CLI for forensic simulation diagnosis...")
         env = os.environ.copy()
         env["HERMES_YOLO_MODE"] = "1"
+        if base_url:
+            env["OPENAI_BASE_URL"] = base_url
+            env["VLLM_BASE_URL"] = base_url
+        if model:
+            env["HERMES_MODEL"] = model
+            env["OPENAI_MODEL_NAME"] = model
         res = subprocess.run(
             [hermes_bin, "chat", "--oneshot", "-q", prompt],
             capture_output=True,
@@ -364,7 +374,7 @@ Please perform a forensic audit of the following OASIS CIB simulation execution:
 - If an error occurred, explain the exact line and root cause in the codebase.
 - Provide a 3-5 bullet point executive summary and concrete remediation actions.
 """
-    diag = query_hermes_cli(prompt)
+    diag = query_hermes_cli(prompt, base_url=base_url, model=model)
     if not diag:
         diag = query_vllm_direct(prompt, base_url=base_url, model=model)
     return diag
@@ -408,7 +418,7 @@ Please perform an authoritative forensic audit of the following multi-run OASIS 
 4. **Ideological Dynamics**: Verify whether stances diversified across topics or suffered neutral collapse (Threat T-07).
 5. **Executive Recommendations**: Deliver a concise executive summary comparing Baseline vs S1 vs S2 vs S3, highlighting scientific anomalies and recommending forward fixes.
 """
-    diag = query_hermes_cli(prompt)
+    diag = query_hermes_cli(prompt, base_url=base_url, model=model)
     if not diag:
         diag = query_vllm_direct(prompt, base_url=base_url, model=model)
     return diag

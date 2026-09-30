@@ -33,9 +33,6 @@ TEST_MODE="${1:-all}"
 # ==============================================================================
 # Robust Project Root & Directory Resolution for SLURM Environments
 # ==============================================================================
-# When running via `sbatch`, SLURM copies the script to /var/spool/slurmd/job*/slurm_script.
-# Using ${BASH_SOURCE[0]} in sbatch resolves to /var/spool/slurmd/, which breaks relative paths.
-# We resolve the true project root by searching SLURM_SUBMIT_DIR, pwd, and marker files.
 resolve_oasis_dir() {
     local candidates=(
         "${OASIS_DIR:-}"
@@ -53,7 +50,6 @@ resolve_oasis_dir() {
         fi
     done
 
-    # Secondary check via readlink if not running inside /var/spool/slurmd/
     local script_parent
     script_parent="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
     if [ -f "${script_parent}/scripts/hermes_diagnostic_gateway.py" ]; then
@@ -61,7 +57,6 @@ resolve_oasis_dir() {
         return 0
     fi
 
-    # Fallback to current working directory
     pwd
 }
 
@@ -74,7 +69,6 @@ cd "${OASIS_DIR}"
 # ==============================================================================
 RAW_BATCH_DIR="${2:-}"
 
-# Expand leading tilde (~) if present in argument
 if [[ "${RAW_BATCH_DIR}" == ~* ]]; then
     RAW_BATCH_DIR="${RAW_BATCH_DIR/#\~/$HOME}"
 fi
@@ -82,34 +76,28 @@ fi
 resolve_batch_dir() {
     local raw="$1"
     if [ -n "$raw" ]; then
-        # 1. Direct absolute path
         if [[ "$raw" == /* ]] && [ -d "$raw" ]; then
             echo "$(cd "$raw" && pwd)"
             return 0
         fi
-        # 2. Relative to SLURM_SUBMIT_DIR (where user invoked sbatch/srun)
         if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}/${raw}" ]; then
             echo "$(cd "${SLURM_SUBMIT_DIR}/${raw}" && pwd)"
             return 0
         fi
-        # 3. Relative to OASIS_DIR
         if [ -d "${OASIS_DIR}/${raw}" ]; then
             echo "$(cd "${OASIS_DIR}/${raw}" && pwd)"
             return 0
         fi
-        # 4. Relative to PARENT_DIR
         if [ -d "${PARENT_DIR}/${raw}" ]; then
             echo "$(cd "${PARENT_DIR}/${raw}" && pwd)"
             return 0
         fi
-        # 5. Relative to current working directory
         if [ -d "$(pwd)/${raw}" ]; then
             echo "$(cd "$(pwd)/${raw}" && pwd)"
             return 0
         fi
     fi
 
-    # Auto-discovery if empty or not found:
     local auto_candidates=(
         "${OASIS_DIR}/experiments"
         "${PARENT_DIR}/batch_run_results"
@@ -120,7 +108,6 @@ resolve_batch_dir() {
     )
     for c in "${auto_candidates[@]}"; do
         if [ -d "$c" ]; then
-            # If candidate contains batch_* subdirectories, pick the latest
             local latest_sub
             latest_sub="$(ls -td "$c"/batch_* 2>/dev/null | head -n 1 || true)"
             if [ -n "$latest_sub" ] && [ -d "$latest_sub" ]; then
@@ -150,18 +137,15 @@ echo "Execution Node : $(hostname) at $(date)"
 echo "Test Target    : ${TEST_MODE} (1=Standalone, 2=Single-Run, 3=Full-Batch, all=All)"
 echo "Project Dir    : ${OASIS_DIR}"
 echo "Batch Dir      : ${BATCH_DIR}"
-echo "vLLM Endpoint  : ${VLLM_URL}"
 echo "Model Name     : ${MODEL_IDENTIFIER}"
 echo "SLURM Job ID   : ${SLURM_JOB_ID:-manual}"
 echo "Submit Dir     : ${SLURM_SUBMIT_DIR:-none}"
 echo "Discord Webhook: $([ -n "${DISCORD_WEBHOOK_URL:-}" ] && echo "Configured" || echo "Not configured (stdout only)")"
 echo "===================================================================="
 
-# Sanity check: Ensure hermes_diagnostic_gateway.py exists
 GATEWAY_HOST_SCRIPT="${OASIS_DIR}/scripts/hermes_diagnostic_gateway.py"
 if [ ! -f "${GATEWAY_HOST_SCRIPT}" ]; then
     echo "[-] ERROR: ${GATEWAY_HOST_SCRIPT} not found!"
-    echo "    Check OASIS_DIR path resolution on node $(hostname)."
     exit 1
 fi
 
@@ -187,12 +171,11 @@ for c in "${OASIS_DIR}/container/oasis_hermes.sif" "$HOME/oasis_hermes.sif" "${O
     fi
 done
 
-# Fallback to oasis_base.sif if oasis_hermes.sif is pending build
 if [ -z "${OASIS_HERMES_SIF}" ]; then
     for c in "${OASIS_DIR}/container/oasis_base.sif" "$HOME/oasis_base.sif" "${OASIS_DIR}/oasis_base.sif"; do
         if [ -f "$c" ]; then
             OASIS_HERMES_SIF="$c"
-            echo "Notice: oasis_hermes.sif not found; falling back to oasis_base.sif"
+            echo "Notice: oasis_hermes.sif not found; using oasis_base.sif"
             break
         fi
     done
@@ -202,18 +185,7 @@ echo "Discovered Container Images:"
 echo "  - hermes.sif       : ${HERMES_SIF:-[NOT FOUND - build with: sbatch build_images_slurm.sh hermes]}"
 echo "  - oasis_hermes.sif : ${OASIS_HERMES_SIF:-[NOT FOUND - build with: sbatch build_images_slurm.sh composite]}"
 
-# Check vLLM Health
-VLLM_HEALTHY=0
-if curl -s -f "${VLLM_URL%/v1}/health" > /dev/null 2>&1 || curl -s -f "${VLLM_URL}/models" > /dev/null 2>&1; then
-    echo "✓ Central vLLM Server is reachable and healthy at ${VLLM_URL}"
-    VLLM_HEALTHY=1
-else
-    echo "⚠ vLLM Server at ${VLLM_URL} is currently unreachable."
-    echo "  (Diagnostics will operate in hermetic local dry-run / structural verification mode if model is offline)"
-fi
-echo ""
-
-# Build Apptainer Bind Arguments (Mounts /app, /workspace/batch, and exact host paths)
+# Build Apptainer Bind Arguments
 CONTAINER_BINDS=("--bind" "${OASIS_DIR}:/app" "--bind" "${OASIS_DIR}:${OASIS_DIR}")
 
 if [ -d "${BATCH_DIR}" ]; then
@@ -224,11 +196,141 @@ if [ -d "${PARENT_DIR}" ] && [ "${PARENT_DIR}" != "/" ]; then
     CONTAINER_BINDS+=("--bind" "${PARENT_DIR}:${PARENT_DIR}")
 fi
 
+if [ -d "/export" ]; then
+    CONTAINER_BINDS+=("--bind" "/export:/export")
+fi
+
 if [ -n "$HOME" ] && [ -d "$HOME" ] && [ "$HOME" != "/" ]; then
     CONTAINER_BINDS+=("--bind" "$HOME:$HOME")
 fi
 
-# Execution dispatcher: runs hermes_diagnostic_gateway inside container if SIF exists, or directly via python3
+if [ -d "$HOME/models" ]; then
+    CONTAINER_BINDS+=("--bind" "$HOME/models:/models")
+fi
+
+# ==============================================================================
+# Dynamic vLLM Server Lifecycle Management
+# ==============================================================================
+VLLM_PID=""
+
+cleanup() {
+    if [ -n "${VLLM_PID}" ]; then
+        echo ""
+        echo "===================================================================="
+        echo "Shutting down dedicated vLLM server (PID: ${VLLM_PID})..."
+        kill -9 "${VLLM_PID}" 2>/dev/null || true
+        pkill -9 -u "$USER" -f "vllm.entrypoints" 2>/dev/null || true
+        echo "Finished at: $(date)"
+        echo "===================================================================="
+    fi
+}
+trap cleanup EXIT INT TERM
+
+VLLM_HEALTHY=0
+if curl -s -f "${VLLM_URL%/v1}/health" > /dev/null 2>&1 || curl -s -f "${VLLM_URL}/models" > /dev/null 2>&1; then
+    echo "✓ Central vLLM Server is already reachable and healthy at ${VLLM_URL}"
+    VLLM_HEALTHY=1
+else
+    echo "Notice: Central vLLM Server at ${VLLM_URL} is not currently running."
+
+    # Check if GPU is present on this node
+    if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
+        echo "[+] GPU detected via nvidia-smi. Searching for model weights to launch dedicated vLLM server..."
+
+        MODEL_CANDIDATES=(
+            "${MODEL_PATH:-}"
+            "/export/home/acs/prof/teodor_daniel.milea/models/Qwen3.8-27B"
+            "/export/home/acs/prof/teodor_daniel.milea/models/Qwen2.5-32B-Instruct-GPTQ-Int8"
+            "$HOME/models/Qwen3.8-27B"
+            "$HOME/models/Qwen2.5-32B-Instruct-GPTQ-Int8"
+            "/models/Qwen3.8-27B"
+            "/models/Qwen2.5-32B-Instruct-GPTQ-Int8"
+            "Qwen/Qwen3.8-27B"
+            "Qwen/Qwen2.5-14B-Instruct"
+        )
+
+        RESOLVED_MODEL=""
+        for m in "${MODEL_CANDIDATES[@]}"; do
+            if [ -n "$m" ] && { [ -d "$m" ] || [ -f "$m" ]; }; then
+                RESOLVED_MODEL="$m"
+                break
+            fi
+        done
+
+        if [ -z "${RESOLVED_MODEL}" ] && [ -n "${HERMES_MODEL:-}" ]; then
+            RESOLVED_MODEL="${HERMES_MODEL}"
+        fi
+
+        VLLM_SIF="${OASIS_HERMES_SIF:-${HERMES_SIF}}"
+
+        if [ -n "${RESOLVED_MODEL}" ] && [ -n "${VLLM_SIF}" ]; then
+            echo "[+] Found Model Weights: ${RESOLVED_MODEL}"
+
+            # Pick port (use 8000 if free, else dynamic)
+            if ! nc -z 127.0.0.1 8000 2>/dev/null && ! curl -s "http://127.0.0.1:8000/health" > /dev/null 2>&1; then
+                VLLM_PORT=8000
+            else
+                JOB_SEED=${SLURM_JOB_ID:-$$}
+                VLLM_PORT=$(( 18000 + (JOB_SEED % 4000) ))
+            fi
+
+            VLLM_URL="http://127.0.0.1:${VLLM_PORT}/v1"
+            VLLM_LOG="${OASIS_DIR}/vllm_hermes_audit.log"
+            pkill -9 -u "$USER" -f "vllm.entrypoints" 2>/dev/null || true
+            sleep 1
+
+            echo "[+] Starting background vLLM server inside ${VLLM_SIF} on port ${VLLM_PORT}..."
+            apptainer exec --nv \
+                "${CONTAINER_BINDS[@]}" \
+                --pwd /app \
+                "${VLLM_SIF}" \
+                python3 -m vllm.entrypoints.openai.api_server \
+                    --model "${RESOLVED_MODEL}" \
+                    --served-model-name "Qwen/Qwen3.8-27B" \
+                    --host 127.0.0.1 \
+                    --port "${VLLM_PORT}" \
+                    --gpu-memory-utilization 0.85 \
+                    --max-model-len 32768 \
+                    --enforce-eager \
+                    --enable-auto-tool-choice \
+                    --tool-call-parser hermes \
+                    --trust-remote-code > "${VLLM_LOG}" 2>&1 &
+            VLLM_PID=$!
+
+            echo "Waiting up to 180s for vLLM server to become healthy on port ${VLLM_PORT} (PID: ${VLLM_PID})..."
+            for i in $(seq 1 90); do
+                sleep 2
+                if ! kill -0 "$VLLM_PID" 2>/dev/null; then
+                    echo "[-] WARNING: vLLM process exited. Check ${VLLM_LOG}:"
+                    tail -n 25 "${VLLM_LOG}" 2>/dev/null || true
+                    break
+                fi
+                if curl -s -f "http://127.0.0.1:${VLLM_PORT}/health" > /dev/null 2>&1; then
+                    echo "✓ vLLM server is healthy and ready to serve Hermes inference!"
+                    VLLM_HEALTHY=1
+                    break
+                fi
+                if [ $((i % 10)) -eq 0 ]; then
+                    STATUS_LINE=$(tail -n 1 "${VLLM_LOG}" 2>/dev/null || echo "initializing...")
+                    echo "  [$(date +%T)] Waiting for vLLM (${i}/90) - Status: ${STATUS_LINE}"
+                fi
+            done
+        else
+            echo "[-] Unable to launch local vLLM (Model or SIF image not found)."
+        fi
+    else
+        echo "[-] No GPU available on this node. (Submit via sbatch / srun on dgxa100 for live vLLM inference)."
+    fi
+fi
+
+if [ "${VLLM_HEALTHY}" -eq 1 ]; then
+    echo "✓ Active Model Endpoint: ${VLLM_URL}"
+else
+    echo "⚠ vLLM unavailable. Operating in local dry-run structural validation mode."
+fi
+echo ""
+
+# Execution dispatchers
 run_gateway() {
     if [ -n "${OASIS_HERMES_SIF}" ] && command -v apptainer &> /dev/null; then
         apptainer exec --nv \
@@ -263,15 +365,17 @@ if [ "${TEST_MODE}" = "1" ] || [ "${TEST_MODE}" = "all" ]; then
     if [ -z "${HERMES_SIF}" ]; then
         echo "[-] SKIPPED: hermes.sif image not found. Build with: sbatch build_images_slurm.sh hermes"
     else
-        echo "[+] Executing inside ${HERMES_SIF}: checking hermes binary and vLLM connectivity..."
+        echo "[+] Executing inside ${HERMES_SIF}..."
         if [ "${VLLM_HEALTHY}" -eq 1 ]; then
+            echo "[+] Querying Hermes Agent CLI with live model at ${VLLM_URL}..."
             run_hermes_cli env \
+                OPENAI_BASE_URL="${VLLM_URL}" \
                 VLLM_BASE_URL="${VLLM_URL}" \
-                HERMES_MODEL="${MODEL_IDENTIFIER}" \
+                HERMES_MODEL="Qwen/Qwen3.8-27B" \
                 HERMES_YOLO_MODE=1 \
-                hermes chat --oneshot -q "Identify yourself, confirm your role as simulation auditor, and summarize the primary objective of CIB propagation research in 2 sentences."
+                hermes chat --oneshot -q "Identify yourself, confirm your role as forensic simulation auditor, and summarize the primary objective of CIB propagation research in 2 sentences."
         else
-            echo "Testing container binary availability:"
+            echo "Testing container binary availability (dry mode):"
             run_hermes_cli which hermes || true
             run_hermes_cli python3 -c "import sys; print('Python in container:', sys.executable)"
         fi
@@ -288,11 +392,9 @@ if [ "${TEST_MODE}" = "2" ] || [ "${TEST_MODE}" = "all" ]; then
     echo "[TEST 2/3] Composite Container Single-Run Audit (oasis_hermes.sif)"
     echo "--------------------------------------------------------------------"
     SAMPLE_RUN_DIR=""
-    # Check if BATCH_DIR itself is an individual run directory
     if [ -f "${BATCH_DIR}/simulation.db" ]; then
         SAMPLE_RUN_DIR="${BATCH_DIR}"
     else
-        # Search inside BATCH_DIR for child run folders with simulation.db
         for candidate in "${BATCH_DIR}"/R07* "${BATCH_DIR}"/R0* "${BATCH_DIR}"/*; do
             if [ -d "${candidate}" ] && [ -f "${candidate}/simulation.db" ]; then
                 SAMPLE_RUN_DIR="${candidate}"
