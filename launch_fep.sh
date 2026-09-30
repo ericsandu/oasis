@@ -32,7 +32,20 @@ fi
 
 cd "${OASIS_DIR}"
 
-CONTAINER_IMAGE="${CONTAINER_IMAGE:-/grid/share/images/pytorch_latest.sif}"
+SIF_CANDIDATES=(
+    "${CONTAINER_IMAGE:-}"
+    "${OASIS_DIR}/container/oasis_hermes.sif"
+    "${OASIS_DIR}/container/oasis_base.sif"
+    "${OASIS_DIR}/oasis.sif"
+    "/grid/share/images/pytorch_latest.sif"
+)
+CONTAINER_IMAGE=""
+for s in "${SIF_CANDIDATES[@]}"; do
+    if [ -n "$s" ] && [ -f "$s" ]; then
+        CONTAINER_IMAGE="$s"
+        break
+    fi
+done
 PRESET="${1:-s1}"
 NUM_BOTS="${2:-8}"
 MAX_STEPS="${3:-10}"

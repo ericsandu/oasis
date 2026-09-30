@@ -54,6 +54,8 @@ echo "===================================================================="
 # 1. Locate Apptainer SIF Image
 SIF_CANDIDATES=(
     "${CONTAINER_IMAGE:-}"
+    "${OASIS_DIR}/container/oasis_hermes.sif"
+    "${OASIS_DIR}/container/oasis_base.sif"
     "$HOME/eric_sandu/oasis.sif"
     "$HOME/oasis.sif"
     "$HOME/camel-oasis.sif"
@@ -287,4 +289,14 @@ echo "Artifacts generated in: ${BATCH_DIR}"
 echo "  - Summary JSON: ${SUMMARY_JSON}"
 echo "  - Dashboard PNG: ${DASHBOARD_PNG}"
 echo "===================================================================="
+
+# 8. Autonomous Hermes Forensic Audit & Discord Webhook Notification
+if [ -f "scripts/hermes_diagnostic_gateway.py" ]; then
+    echo "[Batch Orchestrator] Triggering Hermes forensic audit..."
+    ${PY_EXEC} scripts/hermes_diagnostic_gateway.py \
+        --results-json "${SUMMARY_JSON}" \
+        --log-file "slurm_cib_batch_${SLURM_JOB_ID:-manual}.out" \
+        --webhook-url "${DISCORD_WEBHOOK_URL:-}" || true
+fi
+
 ls -lh "${BATCH_DIR}"
