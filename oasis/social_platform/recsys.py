@@ -14,21 +14,44 @@
 '''Note that you need to check if it exceeds max_rec_post_len when writing
 into rec_matrix'''
 import heapq
+import json
 import logging
 import random
 import time
 from ast import literal_eval
 from datetime import datetime
-from math import log
+from math import exp, log
 from typing import Any
 
-import numpy as np
-import torch
-from sentence_transformers import SentenceTransformer
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
-from .process_recsys_posts import generate_post_vector, generate_post_vector_openai
+import numpy as np
+
+try:
+    import torch
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+except (ImportError, Exception):
+    torch = None
+    device = "cpu"
+
+try:
+    from sentence_transformers import SentenceTransformer
+except (ImportError, Exception):
+    SentenceTransformer = None
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    tfidf_vectorizer = TfidfVectorizer()
+except (ImportError, Exception):
+    TfidfVectorizer = None
+    cosine_similarity = None
+    tfidf_vectorizer = None
+
+try:
+    from .process_recsys_posts import generate_post_vector, generate_post_vector_openai
+except (ImportError, Exception):
+    generate_post_vector = None
+    generate_post_vector_openai = None
 from .typing import ActionType, RecsysType
 
 rec_log = logging.getLogger(name='social.rec')
@@ -39,10 +62,6 @@ model = None
 twhin_tokenizer = None
 twhin_model = None
 
-# Create the TF-IDF model
-tfidf_vectorizer = TfidfVectorizer()
-# Prepare the twhin model
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # All historical tweets and the most recent tweet of each user
 user_previous_post_all = {}
@@ -58,6 +77,81 @@ u_items = {}
 # Get the creation times of all tweets, assigning scores based on how recent
 # they are
 date_score = []
+
+
+def extract_post_id_from_trace(trace: Any) -> int | None:
+    """Defensively extract post_id from a trace record.
+
+    Handles:
+    - trace with direct 'post_id' key (backward compatibility with synthetic dicts)
+    - trace with 'info' field as a JSON string, dict, or literal
+    - None, missing keys, invalid JSON, or non-dict structures without KeyError/crashes.
+    """
+    if not isinstance(trace, dict):
+        return None
+
+    # Check direct 'post_id' key first (for synthetic mock dicts and backward compatibility)
+    if "post_id" in trace and trace["post_id"] is not None:
+        try:
+            return int(trace["post_id"])
+        except (ValueError, TypeError):
+            pass
+
+    info = trace.get("info")
+    if info is None:
+        return None
+
+    if isinstance(info, dict):
+        pid = info.get("post_id")
+        if pid is not None:
+            try:
+                return int(pid)
+            except (ValueError, TypeError):
+                pass
+        return None
+
+    if isinstance(info, str):
+        info_str = info.strip()
+        if not info_str:
+            return None
+        try:
+            parsed = json.loads(info_str)
+            if isinstance(parsed, dict):
+                pid = parsed.get("post_id")
+                if pid is not None:
+                    return int(pid)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            try:
+                parsed = literal_eval(info_str)
+                if isinstance(parsed, dict):
+                    pid = parsed.get("post_id")
+                    if pid is not None:
+                        return int(pid)
+            except Exception:
+                pass
+        return None
+
+    if isinstance(info, (int, float)):
+        try:
+            return int(info)
+        except (ValueError, TypeError):
+            return None
+
+    return None
+
+
+def compute_time_decay_score(time_delta: float, tau: float = 48.0) -> float:
+    """Calculate strictly positive exponential time decay score f(\\Delta t) = exp(-\\Delta t / \\tau).
+
+    Args:
+        time_delta: Non-negative elapsed time or step difference.
+        tau: Half-life decay scale parameter (default: 48.0).
+
+    Returns:
+        Decay multiplier strictly in (0.0, 1.0], monotonically decreasing with time_delta.
+    """
+    dt = max(0.0, float(time_delta))
+    return float(np.exp(-dt / tau))
 
 
 def get_twhin_tokenizer():
@@ -112,11 +206,12 @@ def get_recsys_model(recsys_type: str = None):
 
 
 # Move model to GPU if available
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-if model is not None:
+device = 'cuda' if (torch is not None and torch.cuda.is_available()) else 'cpu'
+if model is not None and hasattr(model, 'to'):
     model.to(device)
 else:
     pass
+
 
 
 # Reset global variables
@@ -366,10 +461,12 @@ def get_like_post_id(user_id, action, trace_table):
         list: List of post IDs.
     """
     # Get post IDs from trace table for the given user and action
-    trace_post_ids = [
-        literal_eval(trace['info'])["post_id"] for trace in trace_table
-        if (trace['user_id'] == user_id and trace['action'] == action)
-    ]
+    trace_post_ids = []
+    for trace in trace_table:
+        if isinstance(trace, dict) and trace.get('user_id') == user_id and trace.get('action') == action:
+            pid = extract_post_id_from_trace(trace)
+            if pid is not None:
+                trace_post_ids.append(pid)
     """Only take the last 5 liked posts, if not enough, pad with the most
     recently liked post. Only take IDs, not content, because calculating
     embeddings for all posts again is very time-consuming, especially when the
@@ -464,12 +561,25 @@ def rec_sys_personalized_twh(
             user_previous_post_all[post['user_id']].append(post['content'])
             user_previous_post[post['user_id']] = post['content']
             # Get the creation times of all tweets, assigning scores based on
-            # how recent they are. Clamp time diff to 270.0 to prevent log(<=0) NaN
-            # on long-horizon simulations (>90 steps).
-            time_delta = min(270.0, max(0.0, float(current_time - int(post['created_at']))))
-            date_score.append(
-                np.log((271.8 - time_delta) / 100.0)
-            )
+            # how recent they are using strictly positive exponential half-life
+            # decay function f(\Delta t) = exp(-\Delta t / \tau) with \tau = 48.0,
+            # eliminating ranking inversion for posts older than 171.8 steps.
+            created_at_val = post.get('created_at', current_time)
+            try:
+                created_at_float = float(created_at_val)
+            except (ValueError, TypeError):
+                try:
+                    dt = datetime.strptime(str(created_at_val), "%Y-%m-%d %H:%M:%S.%f")
+                    created_at_float = dt.timestamp()
+                except Exception:
+                    try:
+                        dt = datetime.strptime(str(created_at_val), "%Y-%m-%d %H:%M:%S")
+                        created_at_float = dt.timestamp()
+                    except Exception:
+                        created_at_float = float(current_time)
+
+            time_delta = max(0.0, float(current_time - created_at_float))
+            date_score.append(compute_time_decay_score(time_delta, tau=48.0))
 
     date_score_np = np.array(date_score)
 
@@ -642,7 +752,11 @@ def swap_random_posts(rec_post_ids, post_ids, swap_percent=0.1):
     Returns:
         list: Updated list of recommended post IDs.
     """
-    num_to_swap = int(len(rec_post_ids) * swap_percent)
+    if not post_ids:
+        return rec_post_ids
+    num_to_swap = min(int(len(rec_post_ids) * swap_percent), len(post_ids))
+    if num_to_swap <= 0:
+        return rec_post_ids
     posts_to_swap = random.sample(post_ids, num_to_swap)
     indices_to_replace = random.sample(range(len(rec_post_ids)), num_to_swap)
 
@@ -666,15 +780,18 @@ def get_trace_contents(user_id, action, post_table, trace_table):
         list: List of post contents.
     """
     # Get post IDs from trace table for the given user and action
-    trace_post_ids = [
-        trace['post_id'] for trace in trace_table
-        if (trace['user_id'] == user_id and trace['action'] == action)
-    ]
+    trace_post_ids = set()
+    for trace in trace_table:
+        if isinstance(trace, dict) and trace.get('user_id') == user_id and trace.get('action') == action:
+            pid = extract_post_id_from_trace(trace)
+            if pid is not None:
+                trace_post_ids.add(pid)
+
     # Fetch post contents from post table where post IDs match those in the
     # trace
     trace_contents = [
         post['content'] for post in post_table
-        if post['post_id'] in trace_post_ids
+        if post.get('post_id') in trace_post_ids
     ]
     return trace_contents
 
@@ -719,15 +836,18 @@ def rec_sys_personalized_with_trace(
     new_rec_matrix = []
     post_ids = [post['post_id'] for post in post_table]
     if len(post_ids) <= max_rec_post_len:
-        new_rec_matrix = [post_ids] * (len(rec_matrix) - 1)
+        new_rec_matrix = [post_ids] * len(user_table)
     else:
-        for idx in range(1, len(rec_matrix)):
-            user_id = user_table[idx - 1]['user_id']
-            user_bio = user_table[idx - 1]['bio']
+        for user in user_table:
+            user_id = user['user_id']
+            user_bio = user.get('bio') or ''
             # filter out posts that belong to the user
-            available_post_contents = [(post['post_id'], post['content'])
+            available_post_contents = [(post['post_id'], post.get('content', ''))
                                        for post in post_table
-                                       if post['user_id'] != user_id]
+                                       if post.get('user_id') != user_id]
+            if not available_post_contents:
+                available_post_contents = [(post['post_id'], post.get('content', ''))
+                                           for post in post_table]
 
             # filter out like-trace and dislike-trace
             like_trace_contents = get_trace_contents(
@@ -740,10 +860,10 @@ def rec_sys_personalized_with_trace(
                 if model is not None:
                     user_embedding = model.encode(user_bio)
                     post_embedding = model.encode(post_content)
+                    denom = (np.linalg.norm(user_embedding) *
+                             np.linalg.norm(post_embedding))
                     base_similarity = np.dot(
-                        user_embedding,
-                        post_embedding) / (np.linalg.norm(user_embedding) *
-                                           np.linalg.norm(post_embedding))
+                        user_embedding, post_embedding) / denom if denom > 0 else 0.0
                     post_scores.append((post_id, base_similarity))
                 else:
                     post_scores.append((post_id, random.random()))
@@ -751,20 +871,22 @@ def rec_sys_personalized_with_trace(
             new_post_scores = []
             # adjust similarity based on like and dislike traces
             for _post_id, _base_similarity in post_scores:
-                _post_content = post_table[post_ids.index(_post_id)]['content']
-                like_similarity = sum(
-                    np.dot(model.encode(_post_content), model.encode(like)) /
-                    (np.linalg.norm(model.encode(_post_content)) *
-                     np.linalg.norm(model.encode(like)))
-                    for like in like_trace_contents) / len(
-                        like_trace_contents) if like_trace_contents else 0
-                dislike_similarity = sum(
-                    np.dot(model.encode(_post_content), model.encode(dislike))
-                    / (np.linalg.norm(model.encode(_post_content)) *
-                       np.linalg.norm(model.encode(dislike)))
-                    for dislike in dislike_trace_contents) / len(
-                        dislike_trace_contents
-                    ) if dislike_trace_contents else 0
+                _post_content = post_table[post_ids.index(_post_id)].get('content', '')
+                like_similarity = 0.0
+                if model is not None and like_trace_contents:
+                    like_similarity = sum(
+                        np.dot(model.encode(_post_content), model.encode(like)) /
+                        max(1e-9, (np.linalg.norm(model.encode(_post_content)) *
+                         np.linalg.norm(model.encode(like))))
+                        for like in like_trace_contents) / len(like_trace_contents)
+
+                dislike_similarity = 0.0
+                if model is not None and dislike_trace_contents:
+                    dislike_similarity = sum(
+                        np.dot(model.encode(_post_content), model.encode(dislike))
+                        / max(1e-9, (np.linalg.norm(model.encode(_post_content)) *
+                           np.linalg.norm(model.encode(dislike))))
+                        for dislike in dislike_trace_contents) / len(dislike_trace_contents)
 
                 # Normalize and apply adjustments
                 adjusted_similarity = normalize_similarity_adjustments(
@@ -781,13 +903,21 @@ def rec_sys_personalized_with_trace(
 
             if swap_rate > 0:
                 # swap the recommended posts with random posts
+                interacted_post_ids = set()
+                for trace in trace_table:
+                    if isinstance(trace, dict) and trace.get('user_id') == user_id:
+                        pid = extract_post_id_from_trace(trace)
+                        if pid is not None:
+                            interacted_post_ids.add(pid)
+
                 swap_free_ids = [
                     post_id for post_id in post_ids
-                    if post_id not in rec_post_ids and post_id not in [
-                        trace['post_id']
-                        for trace in trace_table if trace['user_id']
-                    ]
+                    if post_id not in rec_post_ids and post_id not in interacted_post_ids
                 ]
+                if not swap_free_ids:
+                    swap_free_ids = [
+                        post_id for post_id in post_ids if post_id not in rec_post_ids
+                    ]
                 rec_post_ids = swap_random_posts(rec_post_ids, swap_free_ids,
                                                  swap_rate)
 

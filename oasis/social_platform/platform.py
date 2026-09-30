@@ -90,6 +90,15 @@ class Platform:
         self.db.execute("PRAGMA busy_timeout = 5000")
         self.db.execute("PRAGMA synchronous = OFF")
 
+        # Initialize rec_impression_log schema if not present
+        rec_log_sql_path = os.path.join(
+            os.path.dirname(__file__), "schema", "rec_impression_log.sql"
+        )
+        if os.path.exists(rec_log_sql_path):
+            with open(rec_log_sql_path, "r", encoding="utf-8") as f:
+                self.db_cursor.executescript(f.read())
+            self.db.commit()
+
         self.channel = channel or Channel()
 
         self.recsys_type = RecsysType(recsys_type)
@@ -160,7 +169,7 @@ class Platform:
                 param_names = func_code.co_varnames[:func_code.co_argcount]
 
                 len_param_names = len(param_names)
-                if len_param_names > 3:
+                if len_param_names > 4:
                     raise ValueError(
                         f"Functions with {len_param_names} parameters are not "
                         f"supported.")
@@ -168,14 +177,16 @@ class Platform:
                 params = {}
                 if len_param_names >= 2:
                     params["agent_id"] = agent_id
-                if len_param_names == 3:
-                    # Assuming the second element in param_names is the name
-                    # of the second parameter you want to add
+                if len_param_names >= 3:
                     second_param_name = param_names[2]
                     params[second_param_name] = message
 
                 # Call the function with the parameters
-                result = await action_function(**params)
+                try:
+                    result = await action_function(**params)
+                except Exception as e:
+                    twitter_log.error(f"Error executing action {action}: {e}")
+                    result = {"success": False, "error": str(e)}
                 await self.channel.send_to((message_id, agent_id, result))
             else:
                 raise ValueError(f"Action {action} is not supported")
@@ -395,15 +406,58 @@ class Platform:
             raise ValueError("Unsupported recommendation system type, please "
                              "check the `RecsysType`.")
 
+        # Log feed impressions to rec_impression_log before refreshing rec table
+        step_index = getattr(self.sandbox_clock, "time_step", 0)
+        if self.recsys_type == RecsysType.REDDIT:
+            rec_timestamp = str(
+                self.sandbox_clock.time_transfer(
+                    datetime.now(), self.start_time
+                )
+            )
+        else:
+            rec_timestamp = str(self.sandbox_clock.get_time_step())
+
+        log_values = []
+        for user_id in range(len(new_rec_matrix)):
+            for rank_idx, item in enumerate(new_rec_matrix[user_id]):
+                rank = rank_idx + 1
+                if isinstance(item, (tuple, list)):
+                    post_id = int(item[0])
+                    score = float(item[1]) if len(item) > 1 else 0.0
+                elif isinstance(item, dict):
+                    post_id = int(item["post_id"])
+                    score = float(item.get("score", 0.0))
+                else:
+                    post_id = int(item)
+                    score = 0.0
+                log_values.append(
+                    (step_index, user_id, post_id, rank, score, rec_timestamp)
+                )
+
+        if log_values:
+            self.pl_utils._execute_many_db_command(
+                "INSERT INTO rec_impression_log (step_index, user_id, post_id, rank, score, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                log_values,
+                commit=True,
+            )
+
         sql_query = "DELETE FROM rec"
         # Execute the SQL statement using the _execute_db_command function
         self.pl_utils._execute_db_command(sql_query, commit=True)
 
         # Batch insertion is more time-efficient
         # create a list of values to insert
-        insert_values = [(user_id, post_id)
-                         for user_id in range(len(new_rec_matrix))
-                         for post_id in new_rec_matrix[user_id]]
+        insert_values = []
+        for user_id in range(len(new_rec_matrix)):
+            for item in new_rec_matrix[user_id]:
+                if isinstance(item, (tuple, list)):
+                    post_id = int(item[0])
+                elif isinstance(item, dict):
+                    post_id = int(item["post_id"])
+                else:
+                    post_id = int(item)
+                insert_values.append((user_id, post_id))
 
         # Perform batch insertion into the database
         self.pl_utils._execute_many_db_command(
@@ -412,7 +466,12 @@ class Platform:
             commit=True,
         )
 
-    async def create_post(self, agent_id: int, content: str):
+    async def create_post(
+        self,
+        agent_id: int,
+        content: str | tuple | dict,
+        stance: float = 0.0,
+    ):
         if self.recsys_type == RecsysType.REDDIT:
             current_time = self.sandbox_clock.time_transfer(
                 datetime.now(), self.start_time)
@@ -421,22 +480,33 @@ class Platform:
         try:
             user_id = agent_id
 
+            if isinstance(content, tuple) and len(content) >= 2:
+                content_text = str(content[0])
+                post_stance = float(content[1])
+            elif isinstance(content, dict):
+                content_text = str(content.get("content", ""))
+                post_stance = float(content.get("stance", stance))
+            else:
+                content_text = str(content)
+                post_stance = float(stance)
+
             post_insert_query = (
                 "INSERT INTO post (user_id, content, created_at, num_likes, "
-                "num_dislikes, num_shares) VALUES (?, ?, ?, ?, ?, ?)")
+                "num_dislikes, num_shares, stance) VALUES (?, ?, ?, ?, ?, ?, ?)")
             self.pl_utils._execute_db_command(
-                post_insert_query, (user_id, content, current_time, 0, 0, 0),
+                post_insert_query,
+                (user_id, content_text, current_time, 0, 0, 0, post_stance),
                 commit=True)
             post_id = self.db_cursor.lastrowid
 
-            action_info = {"content": content, "post_id": post_id}
+            action_info = {
+                "content": content_text,
+                "post_id": post_id,
+                "stance": post_stance,
+            }
             self.pl_utils._record_trace(user_id, ActionType.CREATE_POST.value,
                                         action_info, current_time)
 
-            # twitter_log.info(f"Trace inserted: user_id={user_id}, "
-            #                  f"current_time={current_time}, "
-            #                  f"action={ActionType.CREATE_POST.value}, "
-            #                  f"info={action_info}")
             return {"success": True, "post_id": post_id}
 
         except Exception as e:
@@ -465,9 +535,16 @@ class Platform:
                     "error": "Repost record already exists."
                 }
 
+            orig_stance = 0.0
+            stance_query = "SELECT stance FROM post WHERE post_id = ?"
+            self.pl_utils._execute_db_command(stance_query, (post_id,))
+            s_row = self.db_cursor.fetchone()
+            if s_row and s_row[0] is not None:
+                orig_stance = float(s_row[0])
+
             post_type_result = self.pl_utils._get_post_type(post_id)
             post_insert_query = ("INSERT INTO post (user_id, original_post_id"
-                                 ", created_at) VALUES (?, ?, ?)")
+                                 ", created_at, stance) VALUES (?, ?, ?, ?)")
             # Update num_shares for the found post
             update_shares_query = (
                 "UPDATE post SET num_shares = num_shares + 1 WHERE post_id = ?"
@@ -478,7 +555,8 @@ class Platform:
             elif (post_type_result['type'] == 'common'
                   or post_type_result['type'] == 'quote'):
                 self.pl_utils._execute_db_command(
-                    post_insert_query, (user_id, post_id, current_time),
+                    post_insert_query,
+                    (user_id, post_id, current_time, orig_stance),
                     commit=True)
                 self.pl_utils._execute_db_command(update_shares_query,
                                                   (post_id, ),
@@ -500,7 +578,8 @@ class Platform:
 
                 self.pl_utils._execute_db_command(
                     post_insert_query,
-                    (user_id, post_type_result['root_post_id'], current_time),
+                    (user_id, post_type_result['root_post_id'], current_time,
+                     orig_stance),
                     commit=True)
                 self.pl_utils._execute_db_command(
                     update_shares_query, (post_type_result['root_post_id'], ),
@@ -517,7 +596,8 @@ class Platform:
             return {"success": False, "error": str(e)}
 
     async def quote_post(self, agent_id: int, quote_message: tuple):
-        post_id, quote_content = quote_message
+        post_id = quote_message[0]
+        quote_content = quote_message[1]
         if self.recsys_type == RecsysType.REDDIT:
             current_time = self.sandbox_clock.time_transfer(
                 datetime.now(), self.start_time)
@@ -529,12 +609,19 @@ class Platform:
             # Allow quote a post more than once because the quote content may
             # be different
 
-            post_query = "SELECT content FROM post WHERE post_id = ?"
+            post_query = "SELECT content, stance FROM post WHERE post_id = ?"
+            self.pl_utils._execute_db_command(post_query, (post_id,))
+            p_row = self.db_cursor.fetchone()
+            if not p_row:
+                return {"success": False, "error": "Post not found."}
+            post_content = p_row[0]
+            orig_stance = float(p_row[1]) if (len(p_row) > 1 and p_row[1] is not None) else 0.0
+            quote_stance = float(quote_message[2]) if len(quote_message) > 2 else orig_stance
 
             post_type_result = self.pl_utils._get_post_type(post_id)
             post_insert_query = (
                 "INSERT INTO post (user_id, original_post_id, "
-                "content, quote_content, created_at) VALUES (?, ?, ?, ?, ?)")
+                "content, quote_content, created_at, stance) VALUES (?, ?, ?, ?, ?, ?)")
             update_shares_query = (
                 "UPDATE post SET num_shares = num_shares + 1 WHERE post_id = ?"
             )
@@ -542,11 +629,9 @@ class Platform:
             if not post_type_result:
                 return {"success": False, "error": "Post not found."}
             elif post_type_result['type'] == 'common':
-                self.pl_utils._execute_db_command(post_query, (post_id, ))
-                post_content = self.db_cursor.fetchone()[0]
                 self.pl_utils._execute_db_command(
                     post_insert_query, (user_id, post_id, post_content,
-                                        quote_content, current_time),
+                                        quote_content, current_time, quote_stance),
                     commit=True)
                 self.pl_utils._execute_db_command(update_shares_query,
                                                   (post_id, ),
@@ -554,12 +639,9 @@ class Platform:
             elif (post_type_result['type'] == 'repost'
                   or post_type_result['type'] == 'quote'):
                 self.pl_utils._execute_db_command(
-                    post_query, (post_type_result['root_post_id'], ))
-                post_content = self.db_cursor.fetchone()[0]
-                self.pl_utils._execute_db_command(
                     post_insert_query,
                     (user_id, post_type_result['root_post_id'], post_content,
-                     quote_content, current_time),
+                     quote_content, current_time, quote_stance),
                     commit=True)
                 self.pl_utils._execute_db_command(
                     update_shares_query, (post_type_result['root_post_id'], ),
