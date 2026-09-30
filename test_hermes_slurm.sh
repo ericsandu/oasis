@@ -14,7 +14,7 @@
 # ==============================================================================
 # Can be run via:
 #   1. Batch Job:         sbatch test_hermes_slurm.sh [TEST_NUM] [BATCH_DIR] [VLLM_URL]
-#   2. Interactive Node:  srun --partition=dgxa100 --gres=gpu:1 --pty bash test_hermes_slurm.sh [TEST_NUM] [BATCH_DIR] [VLLM_URL]
+#   2. Interactive Node:  srun --account=phd --partition=dgxa100 --gres=gpu:1 --pty bash test_hermes_slurm.sh [TEST_NUM] [BATCH_DIR] [VLLM_URL]
 #   3. Direct Host/Shell: bash test_hermes_slurm.sh [TEST_NUM] [BATCH_DIR] [VLLM_URL]
 #
 # Arguments:
@@ -22,33 +22,120 @@
 #     - 1: Standalone Hermes Agent Image (hermes.sif) Model Query & Tooling Check
 #     - 2: Composite Image (oasis_hermes.sif) Single-Run Forensic Audit (e.g. R07)
 #     - 3: Composite Image (oasis_hermes.sif) Full Batch Directory Forensic Audit
-#   $2 (BATCH_DIR): Path to folder containing batch runs (default: ../batch_run_results)
+#   $2 (BATCH_DIR): Path to folder containing batch runs or single run
 #   $3 (VLLM_URL):  vLLM server endpoint (default: http://127.0.0.1:8000/v1)
 # ==============================================================================
 
 set -eo pipefail
 
 TEST_MODE="${1:-all}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
 
-OASIS_DIR="${SCRIPT_DIR}"
-PARENT_DIR="$(cd "${OASIS_DIR}/.." && pwd)"
+# ==============================================================================
+# Robust Project Root & Directory Resolution for SLURM Environments
+# ==============================================================================
+# When running via `sbatch`, SLURM copies the script to /var/spool/slurmd/job*/slurm_script.
+# Using ${BASH_SOURCE[0]} in sbatch resolves to /var/spool/slurmd/, which breaks relative paths.
+# We resolve the true project root by searching SLURM_SUBMIT_DIR, pwd, and marker files.
+resolve_oasis_dir() {
+    local candidates=(
+        "${OASIS_DIR:-}"
+        "${SLURM_SUBMIT_DIR:-}"
+        "${SLURM_SUBMIT_DIR:-}/oasis"
+        "$(pwd)"
+        "$(pwd)/oasis"
+        "$HOME/eric_sandu/oasis"
+        "$HOME/oasis"
+    )
+    for c in "${candidates[@]}"; do
+        if [ -n "$c" ] && [ -f "$c/scripts/hermes_diagnostic_gateway.py" ]; then
+            echo "$(cd "$c" && pwd)"
+            return 0
+        fi
+    done
 
-# Resolve Batch Directory
-BATCH_DIR="${2:-}"
-if [ -z "${BATCH_DIR}" ]; then
-    if [ -d "${PARENT_DIR}/batch_run_results" ]; then
-        BATCH_DIR="${PARENT_DIR}/batch_run_results"
-    elif [ -d "${PARENT_DIR}/batch_20260927_211357" ]; then
-        BATCH_DIR="${PARENT_DIR}/batch_20260927_211357"
-    elif [ -d "${OASIS_DIR}/experiments" ]; then
-        BATCH_DIR="${OASIS_DIR}/experiments"
-    else
-        BATCH_DIR="${OASIS_DIR}"
+    # Secondary check via readlink if not running inside /var/spool/slurmd/
+    local script_parent
+    script_parent="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+    if [ -f "${script_parent}/scripts/hermes_diagnostic_gateway.py" ]; then
+        echo "${script_parent}"
+        return 0
     fi
+
+    # Fallback to current working directory
+    pwd
+}
+
+OASIS_DIR="$(resolve_oasis_dir)"
+PARENT_DIR="$(cd "${OASIS_DIR}/.." && pwd)"
+cd "${OASIS_DIR}"
+
+# ==============================================================================
+# Robust Batch Directory Resolution (handles ~, relative paths, and fallbacks)
+# ==============================================================================
+RAW_BATCH_DIR="${2:-}"
+
+# Expand leading tilde (~) if present in argument
+if [[ "${RAW_BATCH_DIR}" == ~* ]]; then
+    RAW_BATCH_DIR="${RAW_BATCH_DIR/#\~/$HOME}"
 fi
-BATCH_DIR="$(cd "${BATCH_DIR}" && pwd)"
+
+resolve_batch_dir() {
+    local raw="$1"
+    if [ -n "$raw" ]; then
+        # 1. Direct absolute path
+        if [[ "$raw" == /* ]] && [ -d "$raw" ]; then
+            echo "$(cd "$raw" && pwd)"
+            return 0
+        fi
+        # 2. Relative to SLURM_SUBMIT_DIR (where user invoked sbatch/srun)
+        if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}/${raw}" ]; then
+            echo "$(cd "${SLURM_SUBMIT_DIR}/${raw}" && pwd)"
+            return 0
+        fi
+        # 3. Relative to OASIS_DIR
+        if [ -d "${OASIS_DIR}/${raw}" ]; then
+            echo "$(cd "${OASIS_DIR}/${raw}" && pwd)"
+            return 0
+        fi
+        # 4. Relative to PARENT_DIR
+        if [ -d "${PARENT_DIR}/${raw}" ]; then
+            echo "$(cd "${PARENT_DIR}/${raw}" && pwd)"
+            return 0
+        fi
+        # 5. Relative to current working directory
+        if [ -d "$(pwd)/${raw}" ]; then
+            echo "$(cd "$(pwd)/${raw}" && pwd)"
+            return 0
+        fi
+    fi
+
+    # Auto-discovery if empty or not found:
+    local auto_candidates=(
+        "${OASIS_DIR}/experiments"
+        "${PARENT_DIR}/batch_run_results"
+        "${PARENT_DIR}/batch_20260927_211357"
+        "${SLURM_SUBMIT_DIR:-}/experiments"
+        "${SLURM_SUBMIT_DIR:-}/../batch_run_results"
+        "$HOME/eric_sandu/oasis/experiments"
+    )
+    for c in "${auto_candidates[@]}"; do
+        if [ -d "$c" ]; then
+            # If candidate contains batch_* subdirectories, pick the latest
+            local latest_sub
+            latest_sub="$(ls -td "$c"/batch_* 2>/dev/null | head -n 1 || true)"
+            if [ -n "$latest_sub" ] && [ -d "$latest_sub" ]; then
+                echo "$(cd "$latest_sub" && pwd)"
+                return 0
+            fi
+            echo "$(cd "$c" && pwd)"
+            return 0
+        fi
+    done
+
+    echo "${OASIS_DIR}"
+}
+
+BATCH_DIR="$(resolve_batch_dir "${RAW_BATCH_DIR}")"
 
 VLLM_URL="${3:-${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}}"
 VLLM_PORT="$(echo "${VLLM_URL}" | sed -E 's|.*:([0-9]+).*|\1|')"
@@ -65,8 +152,18 @@ echo "Project Dir    : ${OASIS_DIR}"
 echo "Batch Dir      : ${BATCH_DIR}"
 echo "vLLM Endpoint  : ${VLLM_URL}"
 echo "Model Name     : ${MODEL_IDENTIFIER}"
+echo "SLURM Job ID   : ${SLURM_JOB_ID:-manual}"
+echo "Submit Dir     : ${SLURM_SUBMIT_DIR:-none}"
 echo "Discord Webhook: $([ -n "${DISCORD_WEBHOOK_URL:-}" ] && echo "Configured" || echo "Not configured (stdout only)")"
 echo "===================================================================="
+
+# Sanity check: Ensure hermes_diagnostic_gateway.py exists
+GATEWAY_HOST_SCRIPT="${OASIS_DIR}/scripts/hermes_diagnostic_gateway.py"
+if [ ! -f "${GATEWAY_HOST_SCRIPT}" ]; then
+    echo "[-] ERROR: ${GATEWAY_HOST_SCRIPT} not found!"
+    echo "    Check OASIS_DIR path resolution on node $(hostname)."
+    exit 1
+fi
 
 # Load Apptainer modules if on cluster
 if ! command -v apptainer &> /dev/null; then
@@ -102,8 +199,8 @@ if [ -z "${OASIS_HERMES_SIF}" ]; then
 fi
 
 echo "Discovered Container Images:"
-echo "  - hermes.sif       : ${HERMES_SIF:-[NOT FOUND - build with sbatch build_images_slurm.sh hermes]}"
-echo "  - oasis_hermes.sif : ${OASIS_HERMES_SIF:-[NOT FOUND - build with sbatch build_images_slurm.sh composite]}"
+echo "  - hermes.sif       : ${HERMES_SIF:-[NOT FOUND - build with: sbatch build_images_slurm.sh hermes]}"
+echo "  - oasis_hermes.sif : ${OASIS_HERMES_SIF:-[NOT FOUND - build with: sbatch build_images_slurm.sh composite]}"
 
 # Check vLLM Health
 VLLM_HEALTHY=0
@@ -116,33 +213,43 @@ else
 fi
 echo ""
 
-# Helper to run inside container or host
-exec_hermes() {
-    local cmd="$*"
-    if [ -n "${HERMES_SIF}" ] && command -v apptainer &> /dev/null; then
+# Build Apptainer Bind Arguments (Mounts /app, /workspace/batch, and exact host paths)
+CONTAINER_BINDS=("--bind" "${OASIS_DIR}:/app" "--bind" "${OASIS_DIR}:${OASIS_DIR}")
+
+if [ -d "${BATCH_DIR}" ]; then
+    CONTAINER_BINDS+=("--bind" "${BATCH_DIR}:/workspace/batch" "--bind" "${BATCH_DIR}:${BATCH_DIR}")
+fi
+
+if [ -d "${PARENT_DIR}" ] && [ "${PARENT_DIR}" != "/" ]; then
+    CONTAINER_BINDS+=("--bind" "${PARENT_DIR}:${PARENT_DIR}")
+fi
+
+if [ -n "$HOME" ] && [ -d "$HOME" ] && [ "$HOME" != "/" ]; then
+    CONTAINER_BINDS+=("--bind" "$HOME:$HOME")
+fi
+
+# Execution dispatcher: runs hermes_diagnostic_gateway inside container if SIF exists, or directly via python3
+run_gateway() {
+    if [ -n "${OASIS_HERMES_SIF}" ] && command -v apptainer &> /dev/null; then
         apptainer exec --nv \
-            --bind "${OASIS_DIR}:/app" \
-            --bind "${BATCH_DIR}:/workspace/batch" \
+            "${CONTAINER_BINDS[@]}" \
             --pwd /app \
-            "${HERMES_SIF}" \
-            bash -c "${cmd}"
+            "${OASIS_HERMES_SIF}" \
+            python3 /app/scripts/hermes_diagnostic_gateway.py "$@"
     else
-        bash -c "${cmd}"
+        python3 "${GATEWAY_HOST_SCRIPT}" "$@"
     fi
 }
 
-exec_oasis_hermes() {
-    local cmd="$*"
-    if [ -n "${OASIS_HERMES_SIF}" ] && command -v apptainer &> /dev/null; then
+run_hermes_cli() {
+    if [ -n "${HERMES_SIF}" ] && command -v apptainer &> /dev/null; then
         apptainer exec --nv \
-            --bind "${OASIS_DIR}:/app" \
-            --bind "${BATCH_DIR}:/workspace/batch" \
-            --bind "${PARENT_DIR}:${PARENT_DIR}" \
+            "${CONTAINER_BINDS[@]}" \
             --pwd /app \
-            "${OASIS_HERMES_SIF}" \
-            bash -c "${cmd}"
+            "${HERMES_SIF}" \
+            "$@"
     else
-        poetry run bash -c "${cmd}" 2>/dev/null || bash -c "${cmd}"
+        "$@"
     fi
 }
 
@@ -158,20 +265,15 @@ if [ "${TEST_MODE}" = "1" ] || [ "${TEST_MODE}" = "all" ]; then
     else
         echo "[+] Executing inside ${HERMES_SIF}: checking hermes binary and vLLM connectivity..."
         if [ "${VLLM_HEALTHY}" -eq 1 ]; then
-            exec_hermes "
-                export VLLM_BASE_URL='${VLLM_URL}'
-                export HERMES_MODEL='${MODEL_IDENTIFIER}'
-                export HERMES_YOLO_MODE=1
-                echo 'Testing unconstrained Hermes reasoning prompt...'
-                hermes chat --oneshot -q 'Identify yourself, confirm your role as simulation auditor, and summarize the primary objective of CIB propagation research in 2 sentences.'
-            "
+            run_hermes_cli env \
+                VLLM_BASE_URL="${VLLM_URL}" \
+                HERMES_MODEL="${MODEL_IDENTIFIER}" \
+                HERMES_YOLO_MODE=1 \
+                hermes chat --oneshot -q "Identify yourself, confirm your role as simulation auditor, and summarize the primary objective of CIB propagation research in 2 sentences."
         else
-            exec_hermes "
-                echo 'Testing container binary availability:'
-                which hermes || which /opt/hermes-agent/.hermes/bin/hermes || true
-                echo 'Testing Hermes version:'
-                hermes --version 2>/dev/null || python3 -c 'import hermes; print(hermes.__file__)' 2>/dev/null || echo 'Hermes package verified in container.'
-            "
+            echo "Testing container binary availability:"
+            run_hermes_cli which hermes || true
+            run_hermes_cli python3 -c "import sys; print('Python in container:', sys.executable)"
         fi
         echo "✓ TEST 1 Complete."
     fi
@@ -185,35 +287,40 @@ if [ "${TEST_MODE}" = "2" ] || [ "${TEST_MODE}" = "all" ]; then
     echo "--------------------------------------------------------------------"
     echo "[TEST 2/3] Composite Container Single-Run Audit (oasis_hermes.sif)"
     echo "--------------------------------------------------------------------"
-    # Find sample run subdirectory inside BATCH_DIR (preferably R07 or first with simulation.db)
     SAMPLE_RUN_DIR=""
-    for candidate in "${BATCH_DIR}"/R07* "${BATCH_DIR}"/R0* "${BATCH_DIR}"/*; do
-        if [ -d "${candidate}" ] && [ -f "${candidate}/simulation.db" ]; then
-            SAMPLE_RUN_DIR="${candidate}"
-            break
-        fi
-    done
+    # Check if BATCH_DIR itself is an individual run directory
+    if [ -f "${BATCH_DIR}/simulation.db" ]; then
+        SAMPLE_RUN_DIR="${BATCH_DIR}"
+    else
+        # Search inside BATCH_DIR for child run folders with simulation.db
+        for candidate in "${BATCH_DIR}"/R07* "${BATCH_DIR}"/R0* "${BATCH_DIR}"/*; do
+            if [ -d "${candidate}" ] && [ -f "${candidate}/simulation.db" ]; then
+                SAMPLE_RUN_DIR="${candidate}"
+                break
+            fi
+        done
+    fi
 
     if [ -z "${SAMPLE_RUN_DIR}" ]; then
-        echo "[-] SKIPPED: No sample run folder with simulation.db found in ${BATCH_DIR}."
+        echo "[-] SKIPPED: No run folder with simulation.db found in ${BATCH_DIR}."
     else
-        SAMPLE_JSON="$(ls "${SAMPLE_RUN_DIR}"/*.json 2>/dev/null | head -n 1 || true)"
+        SAMPLE_JSON="$(ls "${SAMPLE_RUN_DIR}"/*results*.json "${SAMPLE_RUN_DIR}"/*.json 2>/dev/null | head -n 1 || true)"
         SAMPLE_DB="${SAMPLE_RUN_DIR}/simulation.db"
         echo "[+] Auditing Single Run: $(basename "${SAMPLE_RUN_DIR}")"
         echo "    Results JSON: ${SAMPLE_JSON}"
         echo "    SQLite DB   : ${SAMPLE_DB}"
 
-        DRY_RUN_ARG=""
-        [ "${VLLM_HEALTHY}" -eq 0 ] && DRY_RUN_ARG="--dry-run"
+        GATEWAY_ARGS=(
+            "--results-json" "${SAMPLE_JSON}"
+            "--db-path" "${SAMPLE_DB}"
+            "--vllm-url" "${VLLM_URL}"
+            "--model" "${MODEL_IDENTIFIER}"
+        )
+        if [ "${VLLM_HEALTHY}" -eq 0 ]; then
+            GATEWAY_ARGS+=("--dry-run")
+        fi
 
-        exec_oasis_hermes "
-            python3 scripts/hermes_diagnostic_gateway.py \
-                --results-json '${SAMPLE_JSON}' \
-                --db-path '${SAMPLE_DB}' \
-                --vllm-url '${VLLM_URL}' \
-                --model '${MODEL_IDENTIFIER}' \
-                ${DRY_RUN_ARG}
-        "
+        run_gateway "${GATEWAY_ARGS[@]}"
         echo "✓ TEST 2 Complete."
     fi
     echo ""
@@ -229,16 +336,16 @@ if [ "${TEST_MODE}" = "3" ] || [ "${TEST_MODE}" = "all" ]; then
     echo "[+] Ingesting batch directory: ${BATCH_DIR}"
     echo "    Scanning summary table, child run JSONs, and SQLite databases..."
 
-    DRY_RUN_ARG=""
-    [ "${VLLM_HEALTHY}" -eq 0 ] && DRY_RUN_ARG="--dry-run"
+    GATEWAY_ARGS=(
+        "--batch-dir" "${BATCH_DIR}"
+        "--vllm-url" "${VLLM_URL}"
+        "--model" "${MODEL_IDENTIFIER}"
+    )
+    if [ "${VLLM_HEALTHY}" -eq 0 ]; then
+        GATEWAY_ARGS+=("--dry-run")
+    fi
 
-    exec_oasis_hermes "
-        python3 scripts/hermes_diagnostic_gateway.py \
-            --batch-dir '${BATCH_DIR}' \
-            --vllm-url '${VLLM_URL}' \
-            --model '${MODEL_IDENTIFIER}' \
-            ${DRY_RUN_ARG}
-    "
+    run_gateway "${GATEWAY_ARGS[@]}"
     echo "✓ TEST 3 Complete."
     echo ""
 fi
