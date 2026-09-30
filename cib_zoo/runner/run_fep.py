@@ -69,6 +69,7 @@ from oasis.environment.env_action import LLMAction, ManualAction
 from oasis.social_platform.channel import Channel
 from oasis.social_platform.config.user import UserInfo
 from oasis.social_platform.platform import Platform
+from oasis.social_platform.recsys import reset_globals
 from oasis.social_platform.typing import ActionType
 
 logging.basicConfig(
@@ -250,6 +251,7 @@ async def execute_narrative_injection(
     target_tag: str = "#target",
     target_subbranch: str = "neuromorphic_computing",
     community_map: Optional[dict[int, str]] = None,
+    is_twin_world: bool = False,
 ) -> tuple[int, int]:
     """Inject baseline and target narrative posts into the living platform environment."""
     # Find an organic agent in the target bubble to publish baseline post
@@ -273,20 +275,37 @@ async def execute_narrative_injection(
         in_bubble_org: [ManualAction(ActionType.CREATE_POST, {"content": baseline_content})]
     }
 
-    if topic_mode == "existing" or (preset != "baseline" and bot_agents):
-        target_poster = (
-            bot_agents[bot_ids[0]]
-            if bot_agents
-            else (organic_agents[1] if len(organic_agents) > 1 else organic_agents[0])
-        )
+    if topic_mode == "existing" or preset != "baseline" or is_twin_world:
+        if is_twin_world:
+            target_poster = (
+                organic_agents[1] if len(organic_agents) > 1 else organic_agents[0]
+            )
+        else:
+            target_poster = (
+                bot_agents[bot_ids[0]]
+                if bot_agents
+                else (organic_agents[1] if len(organic_agents) > 1 else organic_agents[0])
+            )
         payload_content = (
             f"Breakthrough in neuromorphic spike-timing neural hardware architecture {target_clean_tag} {target_clean_subbranch}"
         )
-        injection_actions[target_poster] = [
-            ManualAction(ActionType.CREATE_POST, {"content": payload_content})
-        ]
+        if target_poster == in_bubble_org:
+            injection_actions[target_poster].append(
+                ManualAction(ActionType.CREATE_POST, {"content": payload_content})
+            )
+        else:
+            injection_actions[target_poster] = [
+                ManualAction(ActionType.CREATE_POST, {"content": payload_content})
+            ]
 
+    clock_before = (
+        platform.sandbox_clock.time_step
+        if hasattr(platform, "sandbox_clock") and hasattr(platform.sandbox_clock, "time_step")
+        else None
+    )
     await env.step(injection_actions)
+    if clock_before is not None and hasattr(platform, "sandbox_clock") and hasattr(platform.sandbox_clock, "time_step"):
+        platform.sandbox_clock.time_step = clock_before
 
     if hasattr(platform, "update_rec_table"):
         try:
@@ -482,6 +501,17 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="neuromorphic_computing",
         help="Unheralded specialized subbranch pushed by CIB bots (default: 'neuromorphic_computing').",
+    )
+    parser.add_argument(
+        "--twin-simulation",
+        action="store_true",
+        help="Execute Counterfactual Twin Simulation Protocol (World W0 unattacked control vs World W1 treatment).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for deterministic initialization across twin worlds (default: 42).",
     )
     return parser.parse_args()
 
@@ -818,13 +848,24 @@ async def main() -> int:
                     squad_bot_instances = [
                         bot_agents[b_id] for b_id in squad.bot_ids if b_id in bot_agents
                     ]
+                    # Apply modifier filtering (e.g. PulsedWave duty-cycle filtering)
+                    active_squad_bots = squad_bot_instances
+                    active_arm = getattr(squad, "active_arm", None)
+                    if squad.modifier is not None:
+                        if hasattr(squad.modifier, "filter_squad"):
+                            active_squad_bots = squad.modifier.filter_squad(step=step, squad_bots=squad_bot_instances)
+                        if hasattr(squad.modifier, "sample_arm"):
+                            active_arm = squad.modifier.sample_arm()
+                            squad.active_arm = active_arm
+
                     squad_actions = squad.pattern.generate_step_actions(
                         step=rel_step,
-                        squad_bots=squad_bot_instances,
+                        squad_bots=active_squad_bots,
                         context={
                             "global_step": step,
                             "baseline_post_id": baseline_post_id,
                             "payload_post_id": payload_post_id,
+                            "active_arm": active_arm,
                         },
                     )
                     for b_id, action_list in squad_actions.items():
@@ -832,13 +873,24 @@ async def main() -> int:
                         if bot_agent:
                             step_actions[bot_agent] = action_list
 
+                    # Update modifier posteriors if applicable
+                    if squad.modifier is not None and hasattr(squad.modifier, "update") and active_arm is not None:
+                        squad.modifier.update(arm=active_arm, reward=1.0)
+
             post_actions = []
             if args.use_jev and jev_env is not None:
-                # 1. Execute CIB bot campaign actions if present
+                # 1. Execute CIB bot campaign actions if present without double-ticking clock
                 if step_actions:
+                    clock_before = (
+                        platform.sandbox_clock.time_step
+                        if hasattr(platform, "sandbox_clock") and hasattr(platform.sandbox_clock, "time_step")
+                        else None
+                    )
                     await env.step(step_actions)
+                    if clock_before is not None and hasattr(platform, "sandbox_clock") and hasattr(platform.sandbox_clock, "time_step"):
+                        platform.sandbox_clock.time_step = clock_before
 
-                # 2. Track 1: Parallel Feed Interaction Pass for active organic agents
+                # 2. Track 1: Parallel Feed Interaction Pass for active organic agents (advances clock strictly by +1)
                 active_org_ids = [a.social_agent_id for a in active_organic]
                 jev_res = await jev_env.step_jev(
                     step_index=step,

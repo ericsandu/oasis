@@ -10,7 +10,7 @@ import json
 import math
 import re
 import sqlite3
-from typing import Any, Optional, Union
+from typing import Any, Collection, Optional, Union
 
 
 def is_post_trace_match(info_str: str, post_id: int) -> bool:
@@ -71,18 +71,22 @@ def calculate_exposure_from_db(
     db_path: str,
     post_id: Union[int, list[int], set[int], str],
     epsilon: float = 1e-6,
-    user_ids: Optional[Union[set[int], list[int]]] = None,
+    user_ids: Optional[Collection[int]] = None,
+    exclude_user_ids: Optional[Collection[int]] = None,
 ) -> float:
     """Calculate cumulative visibility and exposure of a post or topic narrative.
 
-    Combines algorithmic recommendations (rec table), engagement signals (likes, comments),
-    and trace logs. Can optionally be partitioned to a specific subset of users (in-bubble or out-of-bubble).
+    Combines algorithmic recommendations (rec table / rec_impression_log),
+    engagement signals (likes, comments), and trace logs. Can optionally be
+    partitioned to a specific subset of users (in-bubble or out-of-bubble) or
+    exclude specific users (such as bots) to isolate organic platform reach.
 
     Args:
         db_path: Path to SQLite simulation database.
         post_id: Target post ID, list of post IDs, or topic/tag pattern string.
         epsilon: Regularization constant preventing division by zero.
         user_ids: Optional filter restricting engagement to a specific cohort of users.
+        exclude_user_ids: Optional filter excluding specific user IDs (e.g. bots).
 
     Returns:
         Exposure score scalar >= 0.0.
@@ -91,7 +95,24 @@ def calculate_exposure_from_db(
     if not pids:
         return 0.0
 
-    target_uids = set(user_ids) if user_ids is not None else None
+    exclude_uids_list = (
+        sorted({int(x) for x in exclude_user_ids})
+        if exclude_user_ids is not None
+        else []
+    )
+    exclude_uids_set = set(exclude_uids_list)
+
+    if user_ids is not None:
+        target_uids_list = sorted(
+            {int(x) for x in user_ids if int(x) not in exclude_uids_set}
+        )
+        target_uids_set = set(target_uids_list)
+        if len(user_ids) > 0 and not target_uids_list:
+            # Target cohort was non-empty, but all target users were excluded
+            return 0.0
+    else:
+        target_uids_list = []
+        target_uids_set = set()
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -101,40 +122,57 @@ def calculate_exposure_from_db(
         existing_tables = {row[0] for row in cursor.fetchall()}
 
         placeholders_p = ",".join("?" for _ in pids)
-        filter_user = target_uids is not None and len(target_uids) > 0
-        placeholders_u = ",".join("?" for _ in target_uids) if filter_user else ""
+        filter_user = bool(target_uids_list)
+        filter_exclude = bool(exclude_uids_list)
+        placeholders_u = ",".join("?" for _ in target_uids_list) if filter_user else ""
+        placeholders_ex = ",".join("?" for _ in exclude_uids_list) if filter_exclude else ""
 
         def count_table_rows(table_name: str) -> int:
             if table_name not in existing_tables:
                 return 0
+            query = f"SELECT COUNT(*) FROM [{table_name}] WHERE post_id IN ({placeholders_p})"
+            params = list(pids)
             if filter_user:
-                cursor.execute(
-                    f"SELECT COUNT(*) FROM [{table_name}] WHERE post_id IN ({placeholders_p}) AND user_id IN ({placeholders_u})",
-                    tuple(pids) + tuple(target_uids),
-                )
-            else:
-                cursor.execute(
-                    f"SELECT COUNT(*) FROM [{table_name}] WHERE post_id IN ({placeholders_p})",
-                    tuple(pids),
-                )
+                query += f" AND user_id IN ({placeholders_u})"
+                params.extend(target_uids_list)
+            if filter_exclude:
+                query += f" AND user_id NOT IN ({placeholders_ex})"
+                params.extend(exclude_uids_list)
+            cursor.execute(query, tuple(params))
             return cursor.fetchone()[0]
 
-        rec_impressions = count_table_rows("rec")
+        # Check rec_impression_log first if available and populated (longitudinal impressions)
+        rec_impressions = 0
+        has_rec_log = False
+        if "rec_impression_log" in existing_tables:
+            cursor.execute("SELECT 1 FROM rec_impression_log LIMIT 1")
+            if cursor.fetchone() is not None:
+                has_rec_log = True
+                rec_impressions = count_table_rows("rec_impression_log")
+
+        if not has_rec_log and "rec" in existing_tables:
+            rec_impressions = count_table_rows("rec")
+
         likes_count = count_table_rows("like")
         comments_count = count_table_rows("comment")
         dislikes_count = count_table_rows("dislike")
         mutes_reports_count = count_table_rows("report")
 
-        # Trace count (evaluating user_id filter if provided)
+        # Trace count (evaluating user_id filters if provided)
         trace_count = 0
         if "trace" in existing_tables:
+            query = "SELECT user_id, info FROM trace"
+            clauses = []
+            params = []
             if filter_user:
-                cursor.execute(
-                    f"SELECT user_id, info FROM trace WHERE user_id IN ({placeholders_u})",
-                    tuple(target_uids),
-                )
-            else:
-                cursor.execute("SELECT user_id, info FROM trace")
+                clauses.append(f"user_id IN ({placeholders_u})")
+                params.extend(target_uids_list)
+            if filter_exclude:
+                clauses.append(f"user_id NOT IN ({placeholders_ex})")
+                params.extend(exclude_uids_list)
+            if clauses:
+                query += " WHERE " + " AND ".join(clauses)
+            cursor.execute(query, tuple(params))
 
             target_pids_set = set(pids)
             for _, info_str in cursor.fetchall():
@@ -144,7 +182,27 @@ def calculate_exposure_from_db(
                         break
 
         # Base reach per post item + weighted interaction volume
-        base_reach = float(len(pids))
+        if filter_exclude:
+            # If strict bot exclusion is active and zero organic interactions occurred
+            # (no impressions, no likes, no comments, no traces), organic reach is 0.0.
+            if (rec_impressions + likes_count + comments_count + trace_count) == 0:
+                return 0.0
+
+            # Posts authored by excluded users (bots) do not grant organic base reach.
+            organic_author_count = 0
+            if "post" in existing_tables:
+                cursor.execute(
+                    f"SELECT post_id, user_id FROM post WHERE post_id IN ({placeholders_p})",
+                    tuple(pids),
+                )
+                for pid, uid in cursor.fetchall():
+                    if uid is not None and uid not in exclude_uids_set:
+                        if not filter_user or uid in target_uids_set:
+                            organic_author_count += 1
+            base_reach = float(organic_author_count)
+        else:
+            base_reach = float(len(pids))
+
         total_exposure = float(
             base_reach
             + (rec_impressions * 2.0)
@@ -166,6 +224,7 @@ def calculate_community_partitioned_exposure(
     in_group_uids: set[int],
     out_group_uids: set[int],
     epsilon: float = 1e-6,
+    exclude_user_ids: Optional[Collection[int]] = None,
 ) -> dict[str, float]:
     """Calculate narrative exposure partitioned into in-bubble, out-of-bubble, and total.
 
@@ -175,13 +234,20 @@ def calculate_community_partitioned_exposure(
         in_group_uids: Set of user IDs residing within the target community bubble.
         out_group_uids: Set of user IDs residing outside the target bubble.
         epsilon: Small epsilon for numerical stability.
+        exclude_user_ids: Optional filter excluding specific user IDs (e.g. bots).
 
     Returns:
         Dictionary with keys 'in_bubble', 'out_bubble', and 'total'.
     """
-    exp_in = calculate_exposure_from_db(db_path, target, epsilon, user_ids=in_group_uids)
-    exp_out = calculate_exposure_from_db(db_path, target, epsilon, user_ids=out_group_uids)
-    exp_total = calculate_exposure_from_db(db_path, target, epsilon, user_ids=None)
+    exp_in = calculate_exposure_from_db(
+        db_path, target, epsilon, user_ids=in_group_uids, exclude_user_ids=exclude_user_ids
+    )
+    exp_out = calculate_exposure_from_db(
+        db_path, target, epsilon, user_ids=out_group_uids, exclude_user_ids=exclude_user_ids
+    )
+    exp_total = calculate_exposure_from_db(
+        db_path, target, epsilon, user_ids=None, exclude_user_ids=exclude_user_ids
+    )
     return {
         "in_bubble": exp_in,
         "out_bubble": exp_out,
@@ -198,6 +264,7 @@ def calculate_dual_bubble_amplification(
     n_bots: int,
     n_seed: int = 1,
     epsilon: float = 1e-6,
+    exclude_user_ids: Optional[Collection[int]] = None,
 ) -> dict[str, float]:
     """Calculate dual in-bubble vs. out-of-bubble causal amplification statistics.
 
@@ -213,6 +280,7 @@ def calculate_dual_bubble_amplification(
         n_bots: Number of coordinated bots.
         n_seed: Number of seed authors (default 1).
         epsilon: Epsilon preventing division by zero.
+        exclude_user_ids: Optional filter excluding specific user IDs (e.g. bots).
 
     Returns:
         Dictionary containing in-bubble, out-bubble, and total amplification scores.
@@ -220,8 +288,12 @@ def calculate_dual_bubble_amplification(
     assert n_bots > 0, f"n_bots must be positive, got {n_bots}"
     assert n_seed > 0, f"n_seed must be positive, got {n_seed}"
 
-    pay_parts = calculate_community_partitioned_exposure(db_path, payload_target, in_group_uids, out_group_uids, epsilon)
-    base_parts = calculate_community_partitioned_exposure(db_path, baseline_target, in_group_uids, out_group_uids, epsilon)
+    pay_parts = calculate_community_partitioned_exposure(
+        db_path, payload_target, in_group_uids, out_group_uids, epsilon, exclude_user_ids=exclude_user_ids
+    )
+    base_parts = calculate_community_partitioned_exposure(
+        db_path, baseline_target, in_group_uids, out_group_uids, epsilon, exclude_user_ids=exclude_user_ids
+    )
 
     resource_ratio = float(n_seed) / float(n_bots)
 
@@ -261,6 +333,7 @@ def calculate_causal_amplification(
     n_seed: int = 1,
     epsilon: float = 1e-6,
     mode: str = "ratio",
+    exclude_user_ids: Optional[Collection[int]] = None,
 ) -> float:
     """Calculate the Causal Algorithmic Amplification metric A(s, r).
 
@@ -275,8 +348,12 @@ def calculate_causal_amplification(
     assert n_bots > 0, f"n_bots must be positive, got {n_bots}"
     assert n_seed > 0, f"n_seed must be positive, got {n_seed}"
 
-    exposure_payload = calculate_exposure_from_db(db_path, payload_post_id, epsilon)
-    exposure_baseline = calculate_exposure_from_db(db_path, baseline_post_id, epsilon)
+    exposure_payload = calculate_exposure_from_db(
+        db_path, payload_post_id, epsilon, exclude_user_ids=exclude_user_ids
+    )
+    exposure_baseline = calculate_exposure_from_db(
+        db_path, baseline_post_id, epsilon, exclude_user_ids=exclude_user_ids
+    )
 
     if mode == "difference":
         return float(exposure_payload - exposure_baseline) / float(n_bots)
@@ -294,7 +371,8 @@ def calculate_differential_amplification(
     n_bots: Optional[int] = None,
     n_seed: int = 1,
     min_expected_bot_actions: int = 0,
-    bot_ids: Optional[list[int]] = None,
+    bot_ids: Optional[Collection[int]] = None,
+    exclude_user_ids: Optional[Collection[int]] = None,
 ) -> float:
     """Calculate the unified additive causal lift per bot unit:
 
@@ -307,6 +385,14 @@ def calculate_differential_amplification(
 
     assert effective_n_bots > 0, f"n_bots must be positive, got {effective_n_bots}"
     assert n_seed > 0, f"n_seed must be positive, got {n_seed}"
+
+    # Determine exclude_user_ids: if explicitly provided, use it;
+    # otherwise, if resolved_bot_ids is available, default to excluding bot self-actions
+    effective_exclude = (
+        exclude_user_ids
+        if exclude_user_ids is not None
+        else (resolved_bot_ids if resolved_bot_ids else None)
+    )
 
     if min_expected_bot_actions > 0:
         conn = sqlite3.connect(db_path)
@@ -337,4 +423,5 @@ def calculate_differential_amplification(
         n_bots=effective_n_bots,
         n_seed=n_seed,
         mode="difference",
+        exclude_user_ids=effective_exclude,
     )
