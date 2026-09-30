@@ -711,8 +711,8 @@ class VLLMJEVClassifierClient:
         auto_generate_comments: bool = False,
         max_retries: int = 2,
         comment_temperature: float = 0.7,
-        comment_max_tokens: int = 64,
-        post_max_tokens: int | None = None,
+        comment_max_tokens: int = 256,
+        post_max_tokens: int | None = 512,
         max_concurrent_comments: int = 8,
         auto_discover_token_ids: bool = False,
     ) -> None:
@@ -731,8 +731,8 @@ class VLLMJEVClassifierClient:
             auto_generate_comments: If True, automatically trigger comment generation on 'C'.
             max_retries: Max retry attempts on transient HTTP/connection errors.
             comment_temperature: Temperature for secondary comment generation.
-            comment_max_tokens: Maximum tokens for secondary comment generation.
-            post_max_tokens: Maximum tokens for spontaneous root post generation.
+            comment_max_tokens: Maximum tokens for secondary comment generation (default: 256).
+            post_max_tokens: Maximum tokens for spontaneous root post generation (default: 512).
             max_concurrent_comments: Semaphore concurrency limit for secondary comment requests.
             auto_discover_token_ids: If True, dynamically queries /tokenize to resolve action token IDs.
         """
@@ -750,7 +750,7 @@ class VLLMJEVClassifierClient:
         self.comment_temperature = comment_temperature
         self.comment_max_tokens = comment_max_tokens
         self.post_max_tokens = (
-            post_max_tokens if post_max_tokens is not None else comment_max_tokens
+            post_max_tokens if post_max_tokens is not None else 512
         )
         self._comment_semaphore = asyncio.Semaphore(max_concurrent_comments)
         self.auto_discover_token_ids = auto_discover_token_ids
