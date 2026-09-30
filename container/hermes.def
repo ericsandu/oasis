@@ -54,7 +54,7 @@ From: ubuntu:24.04
     fi
 
     # 4. Install search, documentation MCP utilities, and discord webhook dependencies
-    pip3 install --no-cache-dir --break-system-packages \
+    uv pip install --system \
         duckduckgo-search \
         mcp \
         httpx \
