@@ -279,13 +279,23 @@ else
             pkill -9 -u "$USER" -f "vllm.entrypoints" 2>/dev/null || true
             sleep 1
 
+            # Export environment variables universally for both host and container
+            export HF_HUB_OFFLINE=1
+            export TRANSFORMERS_OFFLINE=1
+            export VLLM_NO_USAGE_STATS=1
+            export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+            export APPTAINERENV_HF_HUB_OFFLINE=1
+            export APPTAINERENV_TRANSFORMERS_OFFLINE=1
+            export APPTAINERENV_VLLM_NO_USAGE_STATS=1
+            export APPTAINERENV_PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+            export SINGULARITYENV_HF_HUB_OFFLINE=1
+            export SINGULARITYENV_TRANSFORMERS_OFFLINE=1
+            export SINGULARITYENV_VLLM_NO_USAGE_STATS=1
+            export SINGULARITYENV_PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
             echo "[+] Starting background vLLM server inside ${VLLM_SIF} on port ${VLLM_PORT}..."
             apptainer exec --nv \
                 "${CONTAINER_BINDS[@]}" \
-                --env HF_HUB_OFFLINE=1 \
-                --env TRANSFORMERS_OFFLINE=1 \
-                --env VLLM_NO_USAGE_STATS=1 \
-                --env PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True" \
                 --pwd /app \
                 "${VLLM_SIF}" \
                 python3 -m vllm.entrypoints.openai.api_server \
@@ -305,8 +315,8 @@ else
             for i in $(seq 1 300); do
                 sleep 2
                 if ! kill -0 "$VLLM_PID" 2>/dev/null; then
-                    echo "[-] WARNING: vLLM process exited. Check ${VLLM_LOG}:"
-                    tail -n 25 "${VLLM_LOG}" 2>/dev/null || true
+                    echo "[-] WARNING: vLLM process exited. Tail of ${VLLM_LOG}:"
+                    tail -n 35 "${VLLM_LOG}" 2>/dev/null || true
                     break
                 fi
                 if curl -s -f "http://127.0.0.1:${VLLM_PORT}/health" > /dev/null 2>&1; then
@@ -316,8 +326,13 @@ else
                     break
                 fi
                 if [ $((i % 5)) -eq 0 ]; then
-                    STATUS_LINE=$(grep -E "(Loading safetensors|Loading pt checkpoint|Completed|Application startup|Uvicorn running)" "${VLLM_LOG}" 2>/dev/null | tail -n 1)
-                    [ -z "${STATUS_LINE}" ] && STATUS_LINE=$(tail -n 1 "${VLLM_LOG}" 2>/dev/null || echo "initializing...")
+                    STATUS_LINE=""
+                    if [ -f "${VLLM_LOG}" ]; then
+                        STATUS_LINE=$( (grep -E "(Loading safetensors|Loading pt checkpoint|Completed|Application startup|Uvicorn running)" "${VLLM_LOG}" || tail -n 1 "${VLLM_LOG}" || echo "initializing...") 2>/dev/null | tail -n 1 || true )
+                    fi
+                    if [ -z "${STATUS_LINE}" ]; then
+                        STATUS_LINE="initializing..."
+                    fi
                     echo "  [$(date +%T)] Waiting for vLLM (${i}/300) - Status: ${STATUS_LINE}"
                 fi
             done
