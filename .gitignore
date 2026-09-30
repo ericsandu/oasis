@@ -97,6 +97,13 @@ models/
 *.db
 *.sqlite3
 *.sqlite
+*.db-shm
+*.db-wal
 
 tmp
 gorse*
+
+# Simulation outputs & experiment artifacts
+cib_results.json
+baseline_*/
+batch_*/
