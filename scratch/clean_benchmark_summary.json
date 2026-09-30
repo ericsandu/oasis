@@ -1,0 +1,290 @@
+[
+  {
+    "bots": 0,
+    "demographic": "tech",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 26.0,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 0,
+    "demographic": "sports",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 18.4,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 0,
+    "demographic": "politics",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 24.4,
+    "norm_politics_share": 24.4,
+    "amplification": 0.0
+  },
+  {
+    "bots": 0,
+    "demographic": "entertainment",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 19.2,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 2,
+    "demographic": "tech",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 26.0,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 2,
+    "demographic": "sports",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 18.4,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 2,
+    "demographic": "politics",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 24.4,
+    "norm_politics_share": 24.4,
+    "amplification": 0.0
+  },
+  {
+    "bots": 2,
+    "demographic": "entertainment",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 19.2,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 5,
+    "demographic": "tech",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 26.0,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 5,
+    "demographic": "sports",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 18.4,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 5,
+    "demographic": "politics",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 24.4,
+    "norm_politics_share": 24.4,
+    "amplification": 0.0
+  },
+  {
+    "bots": 5,
+    "demographic": "entertainment",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 19.2,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 10,
+    "demographic": "tech",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 26.0,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 10,
+    "demographic": "sports",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 18.4,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 10,
+    "demographic": "politics",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 24.4,
+    "norm_politics_share": 24.4,
+    "amplification": 0.0
+  },
+  {
+    "bots": 10,
+    "demographic": "entertainment",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 19.2,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 15,
+    "demographic": "tech",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 26.0,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 15,
+    "demographic": "sports",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 18.4,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 15,
+    "demographic": "politics",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 24.4,
+    "norm_politics_share": 24.4,
+    "amplification": 0.0
+  },
+  {
+    "bots": 15,
+    "demographic": "entertainment",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 19.2,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 20,
+    "demographic": "tech",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 26.0,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 20,
+    "demographic": "sports",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 18.4,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 20,
+    "demographic": "politics",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 24.4,
+    "norm_politics_share": 24.4,
+    "amplification": 0.0
+  },
+  {
+    "bots": 20,
+    "demographic": "entertainment",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 19.2,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 30,
+    "demographic": "tech",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 26.0,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 30,
+    "demographic": "sports",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 18.4,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 30,
+    "demographic": "politics",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 24.4,
+    "norm_politics_share": 24.4,
+    "amplification": 0.0
+  },
+  {
+    "bots": 30,
+    "demographic": "entertainment",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 19.2,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 50,
+    "demographic": "tech",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 26.0,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 50,
+    "demographic": "sports",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 18.4,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  },
+  {
+    "bots": 50,
+    "demographic": "politics",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 24.4,
+    "norm_politics_share": 24.4,
+    "amplification": 0.0
+  },
+  {
+    "bots": 50,
+    "demographic": "entertainment",
+    "penetration_rate": 0.0,
+    "cib_share_of_voice": 0.0,
+    "home_share_of_voice": 19.2,
+    "norm_politics_share": 30.0,
+    "amplification": 0.0
+  }
+]
