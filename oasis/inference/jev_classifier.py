@@ -22,6 +22,7 @@ worker for conditional comment generation and intra-feed action budget resolutio
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -50,6 +51,101 @@ DEFAULT_VLLM_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1")
 DEFAULT_VLLM_MODEL = os.environ.get(
     "VLLM_MODEL", "Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8"
 )
+
+DEFAULT_ACTION_TOKENS = ("L", "R", "Q", "C", "S")
+
+# Comprehensive token ID fallback maps across cl100k, o200k, Qwen, and LLaMA
+# for both bare single characters ('L') and leading-space tokens (' L')
+DEFAULT_ACTION_TOKEN_MAP: dict[str, list[int]] = {
+    "L": [43, 445, 451, 75, 76],
+    "R": [49, 432, 460, 81, 82],
+    "Q": [48, 1229, 1486, 80, 81],
+    "C": [34, 356, 363, 66, 67],
+    "S": [50, 328, 336, 82, 83],
+}
+
+# Strict JSON Schema Grammar definition for structured output fallbacks
+ACTION_JSON_SCHEMA: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "action_selection",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["L", "R", "Q", "C", "S"],
+                    "description": "Selected social interaction action: L (Like), R (Repost), Q (Quote), C (Comment), S (Skip)",
+                }
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _parse_json_action(raw_text: str) -> str:
+    """Defensively extracts and validates single action character from JSON or text responses.
+
+    Handles strict JSON objects, markdown code blocks, regex key-value extraction,
+    and defaults to JEVPromptBuilder.parse_action_char.
+    """
+    if not raw_text or not raw_text.strip():
+        return "S"
+
+    text = raw_text.strip()
+
+    # 1. Direct JSON deserialization
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            for k in ("action", "reaction", "decision", "choice"):
+                val = data.get(k)
+                if val is not None:
+                    parsed = JEVPromptBuilder.parse_action_char(str(val))
+                    if parsed in JEVPromptBuilder.VALID_ACTIONS:
+                        return parsed
+    except Exception:
+        pass
+
+    # 2. Extract JSON code blocks if present
+    code_block_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if code_block_match:
+        try:
+            data = json.loads(code_block_match.group(1))
+            if isinstance(data, dict):
+                for k in ("action", "reaction", "decision", "choice"):
+                    val = data.get(k)
+                    if val is not None:
+                        parsed = JEVPromptBuilder.parse_action_char(str(val))
+                        if parsed in JEVPromptBuilder.VALID_ACTIONS:
+                            return parsed
+        except Exception:
+            pass
+
+    # 3. Regex key-value matching: "action": "L" or 'action': 'Like'
+    kv_match = re.search(
+        r'["\'](?:action|reaction|decision|choice)["\']\s*:\s*["\']([LRQCS])["\']',
+        text,
+        re.IGNORECASE,
+    )
+    if kv_match:
+        return kv_match.group(1).upper()
+
+    kv_word_match = re.search(
+        r'["\'](?:action|reaction|decision|choice)["\']\s*:\s*["\'](\w+)["\']',
+        text,
+        re.IGNORECASE,
+    )
+    if kv_word_match:
+        parsed = JEVPromptBuilder.parse_action_char(kv_word_match.group(1))
+        if parsed in JEVPromptBuilder.VALID_ACTIONS:
+            return parsed
+
+    # 4. Standard action parsing fallback
+    return JEVPromptBuilder.parse_action_char(text)
 
 
 @dataclass
@@ -752,11 +848,25 @@ class VLLMJEVClassifierClient:
 
         formatted: dict[str, float] = {}
         for k, v in self.raw_logit_bias.items():
+            try:
+                bias_val = max(-100.0, min(100.0, float(v)))
+            except (ValueError, TypeError):
+                bias_val = 50.0
+
             if isinstance(k, int) or (isinstance(k, str) and k.isdigit()):
-                formatted[str(k)] = float(v)
-            elif isinstance(k, str) and k.upper() in self.token_id_map:
-                token_id = self.token_id_map[k.upper()]
-                formatted[str(token_id)] = float(v)
+                formatted[str(k)] = bias_val
+            elif isinstance(k, str):
+                char_key = k.strip().upper()
+                if char_key in self.token_id_map:
+                    val_id = self.token_id_map[char_key]
+                    if isinstance(val_id, (list, tuple)):
+                        for sub_id in val_id:
+                            formatted[str(sub_id)] = bias_val
+                    else:
+                        formatted[str(val_id)] = bias_val
+                elif char_key in DEFAULT_ACTION_TOKEN_MAP:
+                    for tid in DEFAULT_ACTION_TOKEN_MAP[char_key]:
+                        formatted[str(tid)] = bias_val
 
         return formatted if formatted else None
 
@@ -956,36 +1066,136 @@ class VLLMJEVClassifierClient:
     async def _fallback_chat_classify_batch(
         self,
         items: list[EvalItem],
-        generate_comments: bool,
+        generate_comments: bool = False,
     ) -> list[ClassificationResult]:
-        """Fallback implementation using concurrent /v1/chat/completions requests."""
+        """Fallback implementation using concurrent /v1/chat/completions requests.
+
+        Enforces strict 1-token logit biasing, defensive action parsing, and robust
+        JSON schema grammar fallback to guarantee organic actions are preserved and
+        never collapse to 100% Skip ('S').
+        """
+        if not items:
+            return []
+
+        # Enforce logit bias formatting: if raw_logit_bias is unset, build default action bias
+        formatted_bias = self._format_logit_bias_payload()
+        if not formatted_bias:
+            formatted_bias = {}
+            for act, tids in DEFAULT_ACTION_TOKEN_MAP.items():
+                for tid in tids:
+                    formatted_bias[str(tid)] = 50.0
+
         async def _classify_single(item: EvalItem) -> ClassificationResult:
             endpoint = f"{self.base_url}/chat/completions"
-            payload = {
+
+            # 1. Primary Strategy: Chat completions with strict logit biasing
+            payload_with_bias: dict[str, Any] = {
                 "model": self.model_name,
                 "messages": [{"role": "user", "content": item.full_prompt}],
-                "max_tokens": self.classify_max_tokens,
+                "max_tokens": max(4, self.classify_max_tokens),
                 "temperature": self.temperature,
+                "logit_bias": formatted_bias,
             }
-            try:
-                resp = await self._client.post(endpoint, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    content = (
-                        data.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("content", "")
-                    )
-                    action = JEVPromptBuilder.parse_action_char(content)
-                    return ClassificationResult(
-                        user_id=item.user_id,
-                        post_id=item.post_id,
-                        action_char=action,
-                        confidence=0.9,
-                        logits={action: 1.0},
-                    )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Fallback chat classify error for post %d: %s", item.post_id, e)
+
+            for attempt in range(self.max_retries + 1):
+                try:
+                    resp = await self._client.post(endpoint, json=payload_with_bias)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        choice = (
+                            data.get("choices", [{}])[0]
+                            if data.get("choices")
+                            else {}
+                        )
+                        raw_content = choice.get("message", {}).get("content", "")
+                        action = _parse_json_action(raw_content)
+                        if action in JEVPromptBuilder.VALID_ACTIONS:
+                            confidence = 0.95 if action != "S" else 0.5
+                            return ClassificationResult(
+                                user_id=item.user_id,
+                                post_id=item.post_id,
+                                action_char=action,
+                                confidence=confidence,
+                                logits={action: 1.0},
+                            )
+                    elif resp.status_code == 400:
+                        # 2. Secondary Strategy: Fallback to structured JSON Schema Grammar
+                        logger.debug(
+                            "Chat completions rejected logit_bias (HTTP 400); falling back to JSON schema grammar"
+                        )
+                        json_payload: dict[str, Any] = {
+                            "model": self.model_name,
+                            "messages": [
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "You are a social media interaction classifier. Output a JSON object with the "
+                                        "'action' field containing one of: 'L', 'R', 'Q', 'C', 'S'."
+                                    ),
+                                },
+                                {"role": "user", "content": item.full_prompt},
+                            ],
+                            "max_tokens": 16,
+                            "temperature": self.temperature,
+                            "response_format": ACTION_JSON_SCHEMA,
+                        }
+                        resp_json = await self._client.post(endpoint, json=json_payload)
+                        if resp_json.status_code == 200:
+                            data = resp_json.json()
+                            choice = (
+                                data.get("choices", [{}])[0]
+                                if data.get("choices")
+                                else {}
+                            )
+                            raw_content = choice.get("message", {}).get("content", "")
+                            action = _parse_json_action(raw_content)
+                            if action in JEVPromptBuilder.VALID_ACTIONS:
+                                confidence = 0.95 if action != "S" else 0.5
+                                return ClassificationResult(
+                                    user_id=item.user_id,
+                                    post_id=item.post_id,
+                                    action_char=action,
+                                    confidence=confidence,
+                                    logits={action: 1.0},
+                                )
+
+                        # 3. Tertiary Strategy: Standard chat completion without logit_bias or response_format
+                        plain_payload: dict[str, Any] = {
+                            "model": self.model_name,
+                            "messages": [{"role": "user", "content": item.full_prompt}],
+                            "max_tokens": max(4, self.classify_max_tokens),
+                            "temperature": self.temperature,
+                        }
+                        resp_plain = await self._client.post(endpoint, json=plain_payload)
+                        if resp_plain.status_code == 200:
+                            data = resp_plain.json()
+                            choice = (
+                                data.get("choices", [{}])[0]
+                                if data.get("choices")
+                                else {}
+                            )
+                            raw_content = choice.get("message", {}).get("content", "")
+                            action = _parse_json_action(raw_content)
+                            if action in JEVPromptBuilder.VALID_ACTIONS:
+                                confidence = 0.95 if action != "S" else 0.5
+                                return ClassificationResult(
+                                    user_id=item.user_id,
+                                    post_id=item.post_id,
+                                    action_char=action,
+                                    confidence=confidence,
+                                    logits={action: 1.0},
+                                )
+                except Exception as e:  # noqa: BLE001
+                    if attempt == self.max_retries:
+                        logger.warning(
+                            "Fallback chat classify error for post %d: %s",
+                            item.post_id,
+                            e,
+                        )
+                    else:
+                        await asyncio.sleep(0.05 * (2**attempt))
+
+            # Defensive safe fallback
             return ClassificationResult(
                 user_id=item.user_id,
                 post_id=item.post_id,

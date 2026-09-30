@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import random
 import re
@@ -77,6 +78,7 @@ from oasis.social_agent.jev_prompt_builder import (
     PostPrefixData,
 )
 from oasis.social_platform.channel import Channel
+from oasis.social_platform.database import fetch_table_from_db
 from oasis.social_platform.platform import Platform
 from oasis.social_platform.typing import (
     ActionType,
@@ -215,6 +217,20 @@ def default_oasis_channel_formatter(item: ScheduledAction) -> tuple[int, Any, An
     if isinstance(act, dict):
         action_type = act.get("action_type", ActionType.DO_NOTHING)
         message = act.get("message", None)
+        if action_type == ActionType.CREATE_POST:
+            stance = act.get("stance", act.get("post_stance", 0.0))
+            if isinstance(message, dict):
+                if "stance" not in message:
+                    message["stance"] = stance
+            elif isinstance(message, tuple):
+                if len(message) == 1:
+                    message = (message[0], stance)
+            elif isinstance(message, str):
+                message = (message, stance)
+        elif action_type == ActionType.QUOTE_POST:
+            stance = act.get("stance", act.get("post_stance", 0.0))
+            if isinstance(message, tuple) and len(message) == 2:
+                message = (message[0], message[1], stance)
         return (item.user_id, message, action_type)
     return (item.user_id, act, ActionType.DO_NOTHING)
 
@@ -434,23 +450,151 @@ def _get_or_create_post_prefix(
 
 
 def _extract_post_stance(raw_post: Any) -> float:
-    """Extract numeric stance score from post data if present."""
-    if isinstance(raw_post, dict):
-        val = raw_post.get("stance", raw_post.get("post_stance", 0.0))
-        try:
-            return float(val)
-        except (ValueError, TypeError):
-            return 0.0
-    val = getattr(raw_post, "stance", getattr(raw_post, "post_stance", 0.0))
-    try:
-        return float(val)
-    except (ValueError, TypeError):
+    """Extract numeric stance score from post data if present.
+
+    Extracts genuine post stance values from platform/database post records,
+    supporting numeric stances, string-encoded numbers, qualitative labels,
+    sqlite3.Row mapping objects, and nested metadata dictionaries. Clamps output to [-1.0, 1.0].
+    Defaults to 0.0 only when no stance information is present.
+    """
+    if raw_post is None:
         return 0.0
+
+    val = None
+
+    # 1. Dictionary or Mapping (e.g. sqlite3.Row, dict, custom mapping)
+    if hasattr(raw_post, "keys"):
+        try:
+            keys_set = set(raw_post.keys())
+        except Exception:
+            keys_set = set()
+
+        for key in ("stance", "post_stance", "opinion_score", "sentiment_score"):
+            if key in keys_set:
+                try:
+                    candidate = raw_post[key]
+                    if candidate is not None:
+                        val = candidate
+                        break
+                except Exception:
+                    pass
+
+        if val is None:
+            # Check nested metadata, trace info, or post dictionary
+            for sub_key in ("info", "metadata", "properties", "extra", "post"):
+                if sub_key in keys_set:
+                    try:
+                        sub_dict = raw_post[sub_key]
+                        if hasattr(sub_dict, "keys"):
+                            sub_keys = set(sub_dict.keys())
+                            for key in ("stance", "post_stance", "opinion_score"):
+                                if key in sub_keys and sub_dict[key] is not None:
+                                    val = sub_dict[key]
+                                    break
+                        elif isinstance(sub_dict, str) and "stance" in sub_dict:
+                            import json
+
+                            try:
+                                parsed = json.loads(sub_dict)
+                                if hasattr(parsed, "keys"):
+                                    for key in ("stance", "post_stance"):
+                                        if key in parsed and parsed[key] is not None:
+                                            val = parsed[key]
+                                            break
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                if val is not None:
+                    break
+
+    # 2. Object attributes (dataclasses, namedtuples, ORM / SocialAgent post models)
+    if val is None:
+        for attr in ("stance", "post_stance", "opinion_score", "sentiment_score"):
+            if hasattr(raw_post, attr):
+                try:
+                    attr_val = getattr(raw_post, attr)
+                    if attr_val is not None:
+                        val = attr_val
+                        break
+                except Exception:
+                    pass
+
+    # 3. Nested post attribute
+    if val is None and hasattr(raw_post, "post"):
+        try:
+            nested = getattr(raw_post, "post")
+            if nested is not None:
+                val = _extract_post_stance(nested)
+        except Exception:
+            pass
+
+    # 4. Content / body text parsing for explicit embedded stance metadata
+    if val is None:
+        content_text = ""
+        if hasattr(raw_post, "get"):
+            content_text = str(raw_post.get("content", "") or raw_post.get("text", ""))
+        elif hasattr(raw_post, "content"):
+            content_text = str(getattr(raw_post, "content", ""))
+        elif hasattr(raw_post, "text"):
+            content_text = str(getattr(raw_post, "text", ""))
+
+        if content_text:
+            m = re.search(
+                r"\[STANCE\]:?\s*([+-]?\d+(?:\.\d+)?)", content_text, re.IGNORECASE
+            )
+            if not m:
+                m = re.search(
+                    r"\(Stance:\s*([+-]?\d+(?:\.\d+)?)\)", content_text, re.IGNORECASE
+                )
+            if not m:
+                m = re.search(
+                    r"\(Stance:\s*([a-zA-Z]+)\)", content_text, re.IGNORECASE
+                )
+            if m:
+                val = m.group(1)
+
+    # 5. Type normalization and numeric conversion
+    if val is not None:
+        if isinstance(val, bool):
+            return 1.0 if val else -1.0
+        if isinstance(val, (int, float)):
+            try:
+                num = float(val)
+                if not math.isnan(num):
+                    return max(-1.0, min(1.0, num))
+            except (ValueError, TypeError):
+                return 0.0
+        if isinstance(val, str):
+            v_clean = val.strip().lower()
+            if v_clean in ("supportive", "support", "pro", "positive"):
+                return 0.8
+            elif v_clean in ("skeptical", "oppose", "against", "anti", "negative"):
+                return -0.8
+            elif v_clean in ("neutral", "undecided", "balanced"):
+                return 0.0
+            try:
+                num = float(val)
+                if not math.isnan(num):
+                    return max(-1.0, min(1.0, num))
+            except (ValueError, TypeError):
+                pass
+
+    return 0.0
 
 
 def _extract_peer_engagement(raw_post: Any) -> int:
     """Extract peer engagement signal (likes, shares, reddit score) from post."""
-    if isinstance(raw_post, dict):
+    if hasattr(raw_post, "keys"):
+        try:
+            keys = set(raw_post.keys())
+            likes = raw_post["num_likes"] if "num_likes" in keys else 0
+            shares = raw_post["num_shares"] if "num_shares" in keys else 0
+            score = raw_post["score"] if "score" in keys else 0
+            return int(likes or 0) + int(shares or 0) + max(0, int(score or 0))
+        except (ValueError, TypeError, KeyError):
+            pass
+    elif hasattr(raw_post, "get"):
         likes = raw_post.get("num_likes", 0) or 0
         shares = raw_post.get("num_shares", 0) or 0
         score = raw_post.get("score", 0) or 0
@@ -596,6 +740,38 @@ class JEVEnvironment(OasisEnv):
         """Assign or override BeliefState for a user."""
         self.belief_states[user_id] = state
 
+    def _enrich_posts_with_stance(self, posts: list[Any]) -> list[Any]:
+        """Enriches raw post dictionaries from feed with their real database stance if missing."""
+        if not posts or self.platform is None or getattr(self.platform, "db_cursor", None) is None:
+            return posts
+
+        missing_pids = []
+        for p in posts:
+            if isinstance(p, dict) and "stance" not in p:
+                pid = p.get("post_id")
+                if pid is not None:
+                    missing_pids.append(pid)
+
+        if missing_pids:
+            try:
+                cursor = self.platform.db_cursor
+                db_posts = fetch_table_from_db(cursor, "post")
+                lookup = {
+                    row["post_id"]: float(row.get("stance", 0.0) or 0.0)
+                    for row in db_posts
+                    if "post_id" in row
+                }
+                for p in posts:
+                    if isinstance(p, dict) and "stance" not in p:
+                        pid = p.get("post_id")
+                        if pid in lookup:
+                            p["stance"] = lookup[pid]
+                            p["post_stance"] = lookup[pid]
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Failed to enrich post stances from database: %s", e)
+
+        return posts
+
     async def _retrieve_agent_feed(self, agent: Any) -> list[Any]:
         """Fetch personalized post feed for an individual agent."""
         user_id = _get_agent_id(agent)
@@ -605,9 +781,9 @@ class JEVEnvironment(OasisEnv):
             try:
                 res = await self.platform.refresh(user_id)
                 if isinstance(res, dict) and res.get("success"):
-                    return list(res.get("posts", []))
+                    return self._enrich_posts_with_stance(list(res.get("posts", [])))
                 elif isinstance(res, list):
-                    return list(res)
+                    return self._enrich_posts_with_stance(list(res))
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"platform.refresh({user_id}) failed: {e}")
 
@@ -620,9 +796,9 @@ class JEVEnvironment(OasisEnv):
             try:
                 res = await agent.env.action.refresh()
                 if isinstance(res, dict) and res.get("success"):
-                    return list(res.get("posts", []))
+                    return self._enrich_posts_with_stance(list(res.get("posts", [])))
                 elif isinstance(res, list):
-                    return list(res)
+                    return self._enrich_posts_with_stance(list(res))
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"agent.env.action.refresh() failed for {user_id}: {e}")
 
@@ -635,7 +811,7 @@ class JEVEnvironment(OasisEnv):
                     else agent.get_feed()
                 )
                 if isinstance(feed, list):
-                    return list(feed)
+                    return self._enrich_posts_with_stance(list(feed))
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"agent.get_feed() failed for {user_id}: {e}")
 
@@ -892,6 +1068,7 @@ class JEVEnvironment(OasisEnv):
                 message = None
                 action_name = "do_nothing"
 
+            post_stance = _extract_post_stance(raw_post)
             action_dict = {
                 "action_type": action_type,
                 "action_char": res.action_char,
@@ -902,6 +1079,8 @@ class JEVEnvironment(OasisEnv):
                 "quote_text": res.quote_text,
                 "confidence": res.confidence,
                 "topic": topic,
+                "stance": post_stance,
+                "post_stance": post_stance,
                 "raw_post": raw_post,
             }
             agent_actions_to_schedule.append((res.user_id, action_dict, act_freq))
@@ -921,7 +1100,14 @@ class JEVEnvironment(OasisEnv):
             raw_post = act_dict.get("raw_post", {})
 
             if self.config.enable_belief_updates:
-                post_stance = _extract_post_stance(raw_post)
+                post_stance = act_dict.get("stance")
+                if post_stance is None:
+                    post_stance = _extract_post_stance(raw_post)
+                else:
+                    try:
+                        post_stance = float(post_stance)
+                    except (ValueError, TypeError):
+                        post_stance = _extract_post_stance(raw_post)
                 peer_engagement = _extract_peer_engagement(raw_post)
                 belief_state.update_stance(
                     topic=topic,
@@ -1140,14 +1326,24 @@ class JEVEnvironment(OasisEnv):
         for (user_id, agent, _, topic, _, act_freq), content in zip(
             selected_candidates, post_texts
         ):
+            b_state = self.get_belief_state(user_id)
+            agent_stance = b_state.get_stance(topic)
             action_dict = {
                 "action_type": ActionType.CREATE_POST,
                 "action_char": "P",
                 "action_name": "create_post",
-                "message": content,
+                "message": (content, agent_stance),
                 "content": content,
                 "topic": topic,
+                "stance": agent_stance,
+                "post_stance": agent_stance,
                 "post_id": 0,
+                "raw_post": {
+                    "content": content,
+                    "topic": topic,
+                    "stance": agent_stance,
+                    "post_stance": agent_stance,
+                },
             }
             if hasattr(agent, "record_action"):
                 agent.record_action(ActionType.CREATE_POST)
