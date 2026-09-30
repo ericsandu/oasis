@@ -102,11 +102,10 @@ def query_vllm_direct(
             },
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 1500,
         "temperature": 0.2,
     }
     try:
-        resp = requests.post(url, json=payload, timeout=60)
+        resp = requests.post(url, json=payload, timeout=180)
         resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"].strip()
