@@ -45,13 +45,24 @@ From: oasis_base.sif
     fi
     chmod +x /usr/local/bin/hermes 2>/dev/null || true
 
-    # 3. Install search, documentation MCP utilities, and discord webhook packages
+    # 3. Install search, documentation MCP utilities, and discord webhook packages into Hermes venv
+    if [ -f /opt/hermes-agent/.hermes/bin/python ]; then
+        echo "[+] Installing search, MCP, and Discord utilities directly into Hermes runtime venv..."
+        uv pip install --python /opt/hermes-agent/.hermes/bin/python \
+            duckduckgo-search \
+            mcp \
+            httpx \
+            requests \
+            pyyaml
+    fi
+
+    # Also install in container system environment with --break-system-packages
     uv pip install --system --break-system-packages \
         duckduckgo-search \
         mcp \
         httpx \
         requests \
-        pyyaml
+        pyyaml 2>/dev/null || true
 
     # 4. Default configuration connecting to local vLLM serving Qwen 3.8 27B
     cat << 'EOF' > /etc/hermes/config.yaml

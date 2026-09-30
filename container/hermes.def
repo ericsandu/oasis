@@ -60,13 +60,24 @@ From: ubuntu:24.04
     fi
     chmod +x /usr/local/bin/hermes 2>/dev/null || true
 
-    # 4. Install search, documentation MCP utilities, and discord webhook dependencies in system Python
+    # 4. Install search, documentation MCP utilities, and discord webhook dependencies into Hermes venv
+    if [ -f /opt/hermes-agent/.hermes/bin/python ]; then
+        echo "[+] Installing search, MCP, and Discord utilities directly into Hermes runtime venv..."
+        uv pip install --python /opt/hermes-agent/.hermes/bin/python \
+            duckduckgo-search \
+            mcp \
+            httpx \
+            requests \
+            pyyaml
+    fi
+
+    # Also install in container system environment with --break-system-packages
     uv pip install --system --break-system-packages \
         duckduckgo-search \
         mcp \
         httpx \
         requests \
-        pyyaml
+        pyyaml 2>/dev/null || true
 
     # 5. Default configuration for local vLLM serving Qwen 3.8 27B (256K context)
     cat << 'EOF' > /etc/hermes/config.yaml
