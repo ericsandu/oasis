@@ -761,6 +761,45 @@ class TestVLLMJEVClassifierClient:
         await client.aclose()
         mock_client.aclose.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_generative_token_bounds_comments_and_posts(self) -> None:
+        """Verify that generative queries for comments, quotes, and posts enforce explicit token bounds."""
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": "Generated text response."}}]
+        }
+        mock_client.post.return_value = mock_resp
+
+        client = VLLMJEVClassifierClient(
+            base_url="http://mock-vllm:8000/v1",
+            client=mock_client,
+            comment_max_tokens=48,
+            post_max_tokens=96,
+            comment_temperature=0.6,
+        )
+
+        # 1. Comment generation token bound
+        comment = await client.generate_comment("User persona prompt", "Target post text")
+        assert comment == "Generated text response."
+        call_kwargs = mock_client.post.call_args.kwargs
+        assert call_kwargs["json"]["max_tokens"] == 48
+        assert call_kwargs["json"]["temperature"] == 0.6
+
+        # 2. Quote generation token bound
+        quote = await client.generate_quote("User persona prompt", "Target post text")
+        assert quote == "Generated text response."
+        call_kwargs = mock_client.post.call_args.kwargs
+        assert call_kwargs["json"]["max_tokens"] == 48
+
+        # 3. Spontaneous post generation token bound
+        post = await client.generate_post("Agent persona", "tech", "Supportive")
+        assert "Generated text response." in post
+        call_kwargs = mock_client.post.call_args.kwargs
+        assert call_kwargs["json"]["max_tokens"] == 96
+
+
 
 # ==============================================================================
 # Architectural AST Guardrail Tests

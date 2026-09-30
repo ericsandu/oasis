@@ -424,7 +424,19 @@ def parse_args() -> argparse.Namespace:
         "--max-tokens",
         type=int,
         default=512,
-        help="Maximum output generation tokens per agent turn (default: 512).",
+        help="Maximum output generation tokens per agent turn in standard non-JEV mode (default: 512).",
+    )
+    parser.add_argument(
+        "--comment-max-tokens",
+        type=int,
+        default=64,
+        help="Maximum output generation tokens for agent comments and quotes in JEV mode (default: 64).",
+    )
+    parser.add_argument(
+        "--post-max-tokens",
+        type=int,
+        default=64,
+        help="Maximum output generation tokens for spontaneous agent root posts in JEV mode (default: 64).",
     )
     parser.add_argument(
         "--temperature",
@@ -652,7 +664,8 @@ async def main() -> int:
                     model_name=args.model,
                     temperature=args.temperature,
                     classify_max_tokens=1,
-                    comment_max_tokens=64,
+                    comment_max_tokens=args.comment_max_tokens,
+                    post_max_tokens=args.post_max_tokens,
                     comment_temperature=args.temperature,
                     auto_discover_token_ids=True,
                 )
