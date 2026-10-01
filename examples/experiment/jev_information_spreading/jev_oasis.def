@@ -1,21 +1,24 @@
 Bootstrap: docker
-From: vllm/vllm-openai:latest
+From: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
 
 # =============================================================================
-# Apptainer image for the JEV "Information Spreading in X" reproduction.
+# Apptainer image for the JEV Information-Spreading reproduction.
 #
-# Built on the SAME proven base as the P0 oasis_base.sif (vllm/vllm-openai:latest)
-# -- that image already ships vLLM + PyTorch + CUDA with a modern glibc, so it
-# avoids the fakeroot/GLIBC build failure seen with the nvidia/cuda base and
-# needs no hand-rolled torch/vLLM install.
+# Ported from the ORIGINAL cib-modular/jev-optimization oasis.def that targets
+# the cluster's CURRENT driver. The previous SIF was built on
+# vllm/vllm-openai:latest (torch cu121) and now fails on dgxa100 nodes with
+# "No CUDA GPUs are available" because those nodes were upgraded to driver
+# 590.48.01 / CUDA 13.1 -- too new for cu121 torch (nvidia-smi sees the GPU but
+# torch.cuda.is_available() is False).
 #
-# OASIS dependencies (incl. sentence-transformers, required for recommender
-# parity) are installed from the repo's own pyproject.toml via Poetry, exactly
-# as oasis_base.def does. Only pyproject.toml is copied in; the repo code is
-# bind-mounted at /app by the sbatch runner at RUN time (so broken symlinks in
-# the working tree never reach the build).
+# This base (CUDA 13.3.1, Ubuntu 24.04) matches the new driver, installs the
+# latest torch + vLLM (CUDA 13-compatible), and Ubuntu 24.04's newer glibc also
+# avoids the fakeroot/GLIBC build failure seen with the 22.04-based base.
 #
-# Build (run from the repo root so %files finds pyproject.toml):
+# OASIS deps come from the repo's pyproject.toml via Poetry; only pyproject.toml
+# is copied in, so the build never touches the (symlink-messy) working tree.
+#
+# Build from the repo root (so %files finds pyproject.toml):
 #     apptainer build \
 #       examples/experiment/jev_information_spreading/jev_oasis.sif \
 #       examples/experiment/jev_information_spreading/jev_oasis.def
@@ -25,6 +28,7 @@ From: vllm/vllm-openai:latest
     Maintainer CIB-Propagation Team
     Purpose    "JEV Information-Spreading reproduction (OASIS paper F.2.2)"
     Branch     "feat/jev-engine-core"
+    Base       "nvidia/cuda:13.3.1 / torch+vLLM latest (matches driver 590/CUDA13.1)"
 
 %files
     pyproject.toml /app/pyproject.toml
@@ -32,48 +36,44 @@ From: vllm/vllm-openai:latest
 %environment
     export LC_ALL=C.UTF-8
     export LANG=C.UTF-8
-    export PATH=/root/.local/bin:/usr/local/bin:$PATH
+    export PATH=/usr/local/bin:/root/.local/bin:$PATH
     export PYTHONPATH=/app:$PYTHONPATH
     export PIP_BREAK_SYSTEM_PACKAGES=1
+    export PYTHONUNBUFFERED=1
 
 %post
     export DEBIAN_FRONTEND=noninteractive
     export PIP_BREAK_SYSTEM_PACKAGES=1
 
-    echo "Configuring JEV/OASIS container on top of official vLLM OpenAI image..."
-
-    # 1. Essential system utilities (match oasis_base.def).
+    # 1. System dependencies
     apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libcairo2-dev \
         pkg-config \
+        python3 \
+        python3-pip \
         python3-dev \
         wget \
         unzip \
         curl \
         git \
-        jq \
-        ripgrep \
         && rm -rf /var/lib/apt/lists/*
 
-    # 2. Astral uv for fast deterministic environment management.
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
+    # 2. PyTorch + vLLM (LATEST, built against CUDA 13 to match the host driver)
+    #    plus Poetry and the hf CLI for first-run model download.
+    echo "Installing Poetry, PyTorch, vLLM (latest, CUDA 13)..."
+    pip install --no-cache-dir poetry torch torchvision torchaudio vllm
+    pip install --no-cache-dir "huggingface_hub[cli]>=0.34"
 
-    # 3. Install Poetry and OASIS dependencies from pyproject.toml WITHOUT
-    #    touching the pre-compiled vLLM / PyTorch already in the base image.
-    #    This brings in sentence-transformers / sklearn / camel-ai etc. per the
-    #    repo's own pins -- required for faithful recommender parity.
-    echo "Installing Poetry and OASIS dependencies..."
-    uv pip install --system poetry
+    # 3. OASIS dependencies from pyproject.toml (brings sentence-transformers,
+    #    camel-ai, sklearn, etc. -- required for recommender parity). The repo
+    #    code itself is bind-mounted at /app at run time.
+    echo "Installing OASIS dependencies via Poetry..."
     cd /app
     poetry config virtualenvs.create false
     poetry install --no-root --no-interaction --no-ansi
 
-    # 4. huggingface_hub CLI (`hf`) for first-run model download into ~/models.
-    uv pip install --system "huggingface_hub[cli]>=0.34"
-
-    # 5. Container mount points (repo + models + outputs bound at run time).
+    # 4. Container mount points (repo + models + outputs bound at run time)
     mkdir -p /app /models /data /experiments /workspace
 
 %runscript
