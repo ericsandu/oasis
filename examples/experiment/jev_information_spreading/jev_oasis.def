@@ -71,7 +71,7 @@ From: nvidia/cuda:13.4.2-cudnn-runtime-ubuntu24.04
     # pins torch 2.11.0 (CUDA-13 build) so the GPU still works on driver 590.
     pip install --no-cache-dir "vllm==0.23.0" "huggingface_hub[cli]"
 
-    # OASIS dependencies. This set is the COMPLETE list of third-party
+    # OASIS dependencies. The first block is the COMPLETE set of third-party
     # top-level imports across oasis/ (verified by static audit): camel-ai,
     # sentence-transformers, pandas, igraph, neo4j, sklearn, tqdm, httpx,
     # transformers+torch (via vllm). Pins match OASIS's pyproject.
@@ -83,7 +83,34 @@ From: nvidia/cuda:13.4.2-cudnn-runtime-ubuntu24.04
         "neo4j==5.23.0" \
         "cairocffi==1.7.1" \
         "pillow==10.3.0" \
-        "scikit-learn" "numpy" "tqdm" "httpx" "pyyaml" "colorama"
+        "scikit-learn" "numpy" "scipy" "tqdm" "httpx" "pyyaml" "colorama"
+
+    # ---- Analysis / visualization deps ----
+    # The align visualization code (visualization/.../code/graph.py, used by
+    # compare_jev_parity.py to compute scale/depth/max_breadth) imports
+    # matplotlib at module top. matplotlib + seaborn also cover any plotting of
+    # propagation curves and NRMSE-vs-real-world comparisons.
+    pip install --no-cache-dir "matplotlib" "seaborn"
+
+    # ---- Future-proofing for JEV generative actions ----
+    # Upcoming JEV work (post / comment / quote generation) needs the model to
+    # GENERATE text, not just classify an action token. That path already runs
+    # through vLLM's /v1/chat/completions (covered by vllm above) and OASIS's
+    # own content pipeline. These are the OASIS pyproject pins NOT pulled
+    # transitively by the set above, added so the full OASIS action surface
+    # (search / trend / content tools) works without another rebuild:
+    #   - unstructured: OASIS content ingestion / document parsing
+    #   - openapi-spec-validator + prance: OpenAPI tool schemas (camel toolkits)
+    #   - requests_oauthlib: OAuth-authed toolkits
+    #   - slack_sdk: Slack toolkit (optional OASIS channel)
+    # Pins match OASIS pyproject; keep them so no future action KeyErrors on a
+    # missing import mid-run.
+    pip install --no-cache-dir \
+        "unstructured==0.13.7" \
+        "openapi-spec-validator==0.7.1" \
+        "prance==23.6.21.0" \
+        "requests_oauthlib==2.0.0" \
+        "slack_sdk==3.31.0"
 
     # Pin mcp to v1 LAST, so it overrides the mcp 2.x that vllm/camel's loose
     # ">=1.3.0" let pip resolve. camel-ai 0.2.90 uses the v1 API
