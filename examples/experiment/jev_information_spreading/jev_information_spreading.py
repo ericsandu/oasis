@@ -52,6 +52,7 @@ from oasis.clock.clock import Clock
 from oasis.environment.env import OasisEnv
 from oasis.environment.jev_env import JEVExecutionConfig
 from oasis.inference.jev_classifier import (
+    DEFAULT_ACTION_TOKEN_MAP,
     MockJEVClassifierClient,
     VLLMJEVClassifierClient,
 )
@@ -108,7 +109,27 @@ def _build_classifier(inference_configs: dict[str, Any]):
     social_log.info(
         "JEV classifier backend: vLLM base_url=%s model=%s", base_url,
         model_name)
-    return VLLMJEVClassifierClient(base_url=base_url, model_name=model_name)
+    # Restrict the classifier to the paper's Information-Spreading action set:
+    # {like (L), repost (R), follow (F), do_nothing (S)} -- NO comment/quote.
+    # Passing an explicit logit_bias built from ONLY these tokens boosts only
+    # them (C and Q get no boost -> effectively never selected) AND bypasses the
+    # client's auto-discovery path, which hardcodes L/R/Q/C/S and would re-admit
+    # comment/quote. Each char maps to several candidate token ids across
+    # tokenizers; bias them all by +50 as the client does.
+    baseline_chars = ("L", "R", "F", "S")
+    logit_bias: dict[int, float] = {}
+    for ch in baseline_chars:
+        for tid in DEFAULT_ACTION_TOKEN_MAP.get(ch, []):
+            logit_bias[tid] = 50.0
+    token_id_map = {ch: DEFAULT_ACTION_TOKEN_MAP[ch][0]
+                    for ch in baseline_chars if ch in DEFAULT_ACTION_TOKEN_MAP}
+    social_log.info("JEV action set restricted to %s", baseline_chars)
+    return VLLMJEVClassifierClient(
+        base_url=base_url,
+        model_name=model_name,
+        logit_bias=logit_bias,
+        token_id_map=token_id_map,
+    )
 
 
 async def running(
