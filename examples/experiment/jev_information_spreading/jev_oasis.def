@@ -83,6 +83,12 @@ From: nvidia/cuda:13.4.2-cudnn-runtime-ubuntu24.04
         "pillow==10.3.0" \
         "scikit-learn" "numpy" "httpx" "pyyaml" "colorama"
 
+    # Pin mcp to v1 LAST, so it overrides the mcp 2.x that vllm/camel's loose
+    # ">=1.3.0" let pip resolve. camel-ai 0.2.90 uses the v1 API
+    # (from mcp.server import FastMCP), which mcp 2.x renamed to MCPServer ->
+    # ImportError at runtime. OASIS's own pyproject pins mcp==1.29.0.
+    pip install --no-cache-dir "mcp==1.29.0"
+
     mkdir -p /app /models /data /experiments
 
 %runscript
