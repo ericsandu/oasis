@@ -17,10 +17,13 @@ import pickle
 import sqlite3
 import numpy as np
 
-# prop_graph lives in the align visualization code
-VIZ = os.path.join(os.path.dirname(__file__),
-                   "../../visualization/twitter_simulation/align_with_real_world/code")
-sys.path.insert(0, os.path.abspath(VIZ))
+# prop_graph lives in the align visualization code. This script sits at
+# examples/experiment/jev_information_spreading/, so the repo root is 3 levels
+# up, and the viz code is <repo>/visualization/.../code.
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+VIZ = os.path.join(_REPO,
+                   "visualization/twitter_simulation/align_with_real_world/code")
+sys.path.insert(0, VIZ)
 import pandas as pd  # noqa: E402
 from graph import prop_graph  # noqa: E402
 
@@ -65,8 +68,8 @@ def nrmse(a, b):
 
 def real_curve(topic, stat):
     p = os.path.join(
-        os.path.dirname(__file__),
-        f"../../data/twitter_dataset/real_world_prop_data/real_data_{stat}/{topic}.pkl")
+        _REPO,
+        f"data/twitter_dataset/real_world_prop_data/real_data_{stat}/{topic}.pkl")
     y = pickle.load(open(os.path.abspath(p), "rb"))
     y = list(y) + [y[-1]] * (HORIZON - len(y))
     return np.array(y[:HORIZON], dtype=float)
@@ -75,7 +78,7 @@ def real_curve(topic, stat):
 def main():
     classic_db, jev_db, topic = sys.argv[1], sys.argv[2], sys.argv[3]
     topics = pd.read_csv(os.path.join(
-        os.path.dirname(__file__), "../../data/twitter_dataset/all_topics.csv"))
+        _REPO, "data/twitter_dataset/all_topics.csv"))
     content = topics[topics["topic_name"] == topic]["source_tweet"].item()
 
     print("=== ACTION COUNTS ===")
