@@ -71,17 +71,19 @@ From: nvidia/cuda:13.4.2-cudnn-runtime-ubuntu24.04
     # pins torch 2.11.0 (CUDA-13 build) so the GPU still works on driver 590.
     pip install --no-cache-dir "vllm==0.23.0" "huggingface_hub[cli]"
 
-    # OASIS dependencies from its pyproject (sentence-transformers, camel-ai,
-    # pandas, igraph, ... -- needed for the recommender + agents). Install the
-    # pinned deps without the project root; the code is bind-mounted at run time.
+    # OASIS dependencies. This set is the COMPLETE list of third-party
+    # top-level imports across oasis/ (verified by static audit): camel-ai,
+    # sentence-transformers, pandas, igraph, neo4j, sklearn, tqdm, httpx,
+    # transformers+torch (via vllm). Pins match OASIS's pyproject.
     pip install --no-cache-dir \
         "camel-ai==0.2.90" \
         "sentence-transformers==3.0.0" \
         "pandas==2.2.2" \
         "igraph==0.11.6" \
+        "neo4j==5.23.0" \
         "cairocffi==1.7.1" \
         "pillow==10.3.0" \
-        "scikit-learn" "numpy" "httpx" "pyyaml" "colorama"
+        "scikit-learn" "numpy" "tqdm" "httpx" "pyyaml" "colorama"
 
     # Pin mcp to v1 LAST, so it overrides the mcp 2.x that vllm/camel's loose
     # ">=1.3.0" let pip resolve. camel-ai 0.2.90 uses the v1 API
