@@ -82,6 +82,11 @@ async def generate_agents(
         }
         profile["other_info"]["user_profile"] = agent_info["user_char"][
             agent_id]
+        # Hourly activation probability (24-dim). Upstream ships this unset, so
+        # the align driver KeyErrors on
+        # profile["other_info"]["active_threshold"]. Populate with the paper's
+        # 0.1 activation probability (matches the repo's test fixtures).
+        profile["other_info"]["active_threshold"] = [0.1] * 24
 
         user_info = UserInfo(
             name=agent_info["username"][agent_id],
