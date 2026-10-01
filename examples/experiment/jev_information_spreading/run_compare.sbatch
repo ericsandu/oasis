@@ -12,7 +12,7 @@
 set -eo pipefail
 
 REPO="${SLURM_SUBMIT_DIR:-$HOME/eric_sandu/oasis}"
-SIF="$HOME/eric_sandu/oasis.sif"
+SIF="${CONTAINER_IMAGE:-$HOME/eric_sandu/oasis/examples/experiment/jev_information_spreading/jev_oasis.sif}"
 cd "$REPO"
 nvidia-smi || true   # confirm the host sees the GPU before launching vLLM
 ALIGN=examples/experiment/twitter_simulation/align_with_real_world
