@@ -49,6 +49,25 @@ else
 fi
 cd "${OASIS_DIR}"
 
+# Relative path (inside the repo) of the JEV driver -- used for both the
+# host-side sanity check and the in-container invocation.
+DRIVER_REL="examples/experiment/jev_information_spreading/jev_information_spreading.py"
+
+# Pre-flight: the repo root we are about to mount as /app MUST contain the
+# driver. If it does not, SLURM_SUBMIT_DIR pointed somewhere other than the
+# repo, or this checkout is not on the feat/jev-engine-core branch (or was not
+# `git pull`-ed). Fail loudly here instead of crashing inside the container.
+if [ ! -f "${OASIS_DIR}/${DRIVER_REL}" ]; then
+    echo "ERROR: JEV driver not found at ${OASIS_DIR}/${DRIVER_REL}" >&2
+    echo "       OASIS_DIR (mounted as /app) = ${OASIS_DIR}" >&2
+    echo "       Check that you submitted sbatch from the repo root AND that" >&2
+    echo "       this checkout is on branch feat/jev-engine-core and up to date:" >&2
+    echo "         cd <repo> && git fetch origin && git checkout feat/jev-engine-core && git pull" >&2
+    echo "       Current branch here: $(git -C "${OASIS_DIR}" branch --show-current 2>/dev/null || echo '?')" >&2
+    exit 1
+fi
+echo "✓ JEV driver present: ${OASIS_DIR}/${DRIVER_REL}"
+
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 EXP_DIR="${OASIS_DIR}/experiments/jev_infospread_${TIMESTAMP}"
 DATA_DIR="${OASIS_DIR}/data/simu_db"
@@ -88,9 +107,6 @@ if [ -n "$CONTAINER_SIF" ] && command -v apptainer &> /dev/null; then
     CONTAINER_RUN="apptainer exec --nv \
         --bind $HOME/models:/models \
         --bind ${OASIS_DIR}:/app \
-        --bind ${OASIS_DIR}:/workspace \
-        --bind ${DATA_DIR}:/app/data/simu_db \
-        --bind ${EXP_DIR}:/app/experiments/current \
         --pwd /app \
         ${CONTAINER_SIF}"
     PY_EXEC="${CONTAINER_RUN} python3"
@@ -265,7 +281,7 @@ echo "Running JEV driver (num_timesteps=${NUM_TIMESTEPS}) ..."
 $CONTAINER_RUN bash -c "
 export VLLM_BASE_URL='http://127.0.0.1:${VLLM_PORT}/v1'
 export VLLM_MODEL='${RESOLVED_MODEL}'
-exec python3 examples/experiment/jev_information_spreading/jev_information_spreading.py \
+exec python3 ${DRIVER_REL} \
     --config_path '${CONFIG}'
 "
 
