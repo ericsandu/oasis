@@ -11,11 +11,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
 from datetime import datetime
-from typing import List, Union
+from typing import Any, List, Union
 
 from oasis.environment.env_action import LLMAction, ManualAction
 from oasis.social_agent.agent import SocialAgent
@@ -196,6 +198,48 @@ class OasisEnv:
         # Update the clock
         if self.platform_type == DefaultPlatformType.TWITTER:
             self.platform.sandbox_clock.time_step += 1
+
+    async def step_jev(
+        self,
+        step_index: int | None = None,
+        base_time: "datetime | str | float | None" = None,
+        agent_feeds: dict[int, list[Any]] | None = None,
+        active_agent_ids: list[int] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        r"""Execute one simulation step using JEV (Joint Evaluation
+        Vectorization) mode.
+
+        Bridges OasisEnv into the high-performance JEV execution pipeline
+        with 1-token logit classification, inverted prefix caching, and
+        micro-time scheduling.
+
+        NOTE: When driving a simulation with ``step_jev`` do NOT also call
+        ``step`` in the same loop -- both advance ``sandbox_clock.time_step``
+        by +1, so interleaving them double-advances the clock (bug T-08).
+        ``step_jev`` is intended to be the sole step driver for JEV runs.
+
+        Args:
+            step_index: Integer simulation step index.
+            base_time: Base simulation start time.
+            agent_feeds: Optional pre-constructed personalized feeds.
+            active_agent_ids: Optional list of agent IDs to evaluate.
+            **kwargs: Extra parameters passed to JEVEnvironment.
+
+        Returns:
+            JEVStepResult containing step analytics, action counts, and
+            scheduled actions.
+        """
+        if not hasattr(self, "_jev_engine") or self._jev_engine is None:
+            from oasis.environment.jev_env import JEVEnvironment
+
+            self._jev_engine = JEVEnvironment(self, **kwargs)
+        return await self._jev_engine.step_jev(
+            step_index=step_index,
+            base_time=base_time,
+            agent_feeds=agent_feeds,
+            active_agent_ids=active_agent_ids,
+        )
 
     async def close(self) -> None:
         r"""Stop the platform and close the environment.

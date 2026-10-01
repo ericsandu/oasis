@@ -11,3 +11,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+
+from oasis.environment.env import OasisEnv
+from oasis.environment.env_action import LLMAction, ManualAction
+from oasis.environment.jev_env import (
+    JEVEnvironment,
+    JEVExecutionConfig,
+    JEVStepResult,
+)
+
+__all__ = [
+    "OasisEnv",
+    "LLMAction",
+    "ManualAction",
+    "JEVEnvironment",
+    "JEVExecutionConfig",
+    "JEVStepResult",
+]
