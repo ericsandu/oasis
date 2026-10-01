@@ -47,7 +47,6 @@ from oasis.environment.env import OasisEnv
 from oasis.environment.jev_runner import (
     jev_enabled,
     run_simulation_step,
-    hourly_threshold_predicate,
 )
 
 social_log = logging.getLogger(name="social")
@@ -205,6 +204,10 @@ async def running(
                 logit_bias=logit_bias, token_id_map=token_id_map),
             max_actions_per_agent=1,
             enable_belief_updates=False,
+            # The driver already calls infra.update_rec_table() once per step
+            # (the expensive twhin-BERT embedding pass). Don't let step_jev run
+            # it a SECOND time -- that doubled the heaviest op every step.
+            update_recsys=False,
         )
         _jev_env = OasisEnv(agent_graph=agent_graph, platform=infra,
                             database_path=db_path)
@@ -221,13 +224,15 @@ async def running(
         simulation_time_hour = start_hour + 0.05 * timestep
         # Shared JEV hook: classic per-agent stepping when JEV is off (behavior
         # identical to upstream), or one batched env.step_jev() when on.
+        # Base-OASIS parity: run ALL non-controllable agents every step (no
+        # activation-threshold subsetting) -- active_predicate=None makes the
+        # hook default to "every non-controllable agent is active".
         await run_simulation_step(
             env=_jev_env,
             agent_graph=agent_graph,
             step_index=timestep,
             base_time=start_time,
             use_jev=_use_jev,
-            active_predicate=hourly_threshold_predicate(simulation_time_hour),
             jev_kwargs=({"config": _jev_cfg} if (_use_jev and timestep == 1)
                         else None),
         )
