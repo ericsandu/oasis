@@ -1,0 +1,28 @@
+# OASIS "Information Spreading in X" baseline (paper F.2.2) driven by the JEV engine.
+# Mirrors the upstream twitter_gpt_example configuration; only the inference
+# backend (JEV + vLLM 1-token classifier) differs from stock OASIS.
+
+data:
+  # Dataset shipped with OASIS; swap to another topic CSV to reproduce other
+  # propagations. The paper repeats each topic 10x (one noisy, one clean).
+  db_path: "./data/simu_db/jev_information_spreading.db"
+  csv_path: "./data/twitter_dataset/anonymous_topic_200_1h/False_Business_0.csv"
+
+simulation:
+  # Paper F.2.2: max 50 time steps, each = 3 minutes of sandbox time
+  # (first 150 simulated minutes are compared against real propagation).
+  num_timesteps: 50
+  clock_factor: 60
+  recsys_type: "twhin-bert"   # stock OASIS Twitter recsys (NOT the Gorse hybrid)
+
+inference:
+  # JEV classifier backend. 'vllm' hits a local vLLM OpenAI-compatible server
+  # (started by the sbatch script); 'mock' runs hermetically with no network.
+  jev_backend: "vllm"
+  base_url: "http://127.0.0.1:8000/v1"
+  # Paper baseline model (OASIS Appendix C.4 / line 479): the real-world
+  # information-propagation reproduction uses Llama-3-8B-Instruct as the agent
+  # backend. The HPC runner downloads it into ~/models on first run and reuses
+  # it thereafter. Ablation alternatives from the paper: Qwen/Qwen1.5-7B-Chat,
+  # internlm/internlm2-chat-20b.
+  model_type: "meta-llama/Meta-Llama-3-8B-Instruct"

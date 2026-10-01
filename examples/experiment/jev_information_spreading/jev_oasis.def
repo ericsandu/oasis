@@ -1,0 +1,66 @@
+Bootstrap: docker
+From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+# =============================================================================
+# Apptainer image for the JEV "Information Spreading in X" reproduction.
+#
+# Contains: Python 3.11, PyTorch (CUDA 12.1), vLLM (OpenAI-compatible server),
+# the OASIS repo (feat/jev-engine-core) installed editable, and the
+# sentence-transformers / camel-ai stack OASIS needs.
+#
+# Build on a node that has internet + fakeroot (or --fakeroot):
+#     apptainer build jev_oasis.sif jev_oasis.def
+#
+# The repo is copied in at build time from the build context. Run the build
+# from the repository root so that %files finds ./ .
+# =============================================================================
+
+%files
+    . /opt/oasis
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates git curl build-essential
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        python3.11 python3.11-venv python3.11-dev
+    rm -rf /var/lib/apt/lists/*
+
+    # Isolated venv on Python 3.11 (repo requires >=3.10,<3.12).
+    python3.11 -m venv /opt/venv
+    . /opt/venv/bin/activate
+    pip install --no-cache-dir --upgrade pip wheel setuptools
+
+    # Torch (CUDA 12.1) + vLLM. Pin vLLM to a release that serves
+    # /v1/completions with logit_bias (the JEV 1-token classifier path).
+    pip install --no-cache-dir torch==2.3.1 --index-url https://download.pytorch.org/whl/cu121
+    pip install --no-cache-dir vllm==0.5.0.post1
+
+    # OASIS runtime deps (match pyproject pins).
+    pip install --no-cache-dir \
+        "camel-ai==0.2.90" \
+        "sentence-transformers==3.0.0" \
+        "pandas==2.2.2" \
+        "huggingface_hub[cli]" \
+        httpx pyyaml colorama scikit-learn numpy
+
+    # Install the repo itself (editable so the mounted source wins at runtime).
+    cd /opt/oasis
+    pip install --no-cache-dir -e . || pip install --no-cache-dir . || true
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONUNBUFFERED=1
+    export HF_HOME=/scratch/hf_cache
+    export VLLM_BASE_URL=http://127.0.0.1:8000/v1
+
+%runscript
+    exec python "$@"
+
+%labels
+    Purpose "JEV Information-Spreading reproduction (OASIS paper F.2.2)"
+    Branch  "feat/jev-engine-core"
