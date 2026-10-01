@@ -235,8 +235,12 @@ async def generate_agents_100w(
         }
         profile["other_info"]["user_profile"] = agent_info["user_char"][
             agent_id]
-        # TODO if you simulate one million agents, use active threshold below.
-        # profile['other_info']['active_threshold'] = [0.01] * 24
+        # Hourly activation probability (24-dim). Upstream shipped this
+        # commented out, which makes the align/group-polar/1M drivers KeyError
+        # at `profile["other_info"]["active_threshold"]`. Populate it with the
+        # paper's 0.1 activation probability (matches the repo's own test
+        # fixtures: active_threshold = [0.1] * 24).
+        profile["other_info"]["active_threshold"] = [0.1] * 24
 
         user_info = UserInfo(
             name=agent_info["username"][agent_id],

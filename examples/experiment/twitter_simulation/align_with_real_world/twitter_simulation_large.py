@@ -47,6 +47,7 @@ from oasis.environment.env import OasisEnv
 from oasis.environment.jev_runner import (
     jev_enabled,
     run_simulation_step,
+    hourly_threshold_predicate,
 )
 
 social_log = logging.getLogger(name="social")
@@ -222,21 +223,34 @@ async def running(
 
         # 0.05 * timestep here means 3 minutes / timestep
         simulation_time_hour = start_hour + 0.05 * timestep
-        # Shared JEV hook: classic per-agent stepping when JEV is off (behavior
-        # identical to upstream), or one batched env.step_jev() when on.
-        # Base-OASIS parity: run ALL non-controllable agents every step (no
-        # activation-threshold subsetting) -- active_predicate=None makes the
-        # hook default to "every non-controllable agent is active".
-        await run_simulation_step(
-            env=_jev_env,
-            agent_graph=agent_graph,
-            step_index=timestep,
-            base_time=start_time,
-            use_jev=_use_jev,
-            jev_kwargs=({"config": _jev_cfg} if (_use_jev and timestep == 1)
-                        else None),
-        )
-        # agent_graph.visualize(f"timestep_{timestep}_social_graph.png")
+
+        if not _use_jev:
+            # ---- VERBATIM UPSTREAM CLASSIC PATH (base-OASIS reference) ----
+            # Byte-for-byte the original OASIS loop, incl. the hourly
+            # active_threshold activation (now populated by generate_agents).
+            tasks = []
+            for node_id, agent in agent_graph.get_agents():
+                if agent.user_info.is_controllable is False:
+                    agent_ac_prob = random.random()
+                    threshold = agent.user_info.profile["other_info"][
+                        "active_threshold"][int(simulation_time_hour % 24)]
+                    if agent_ac_prob < threshold:
+                        tasks.append(agent.perform_action_by_llm())
+                else:
+                    await agent.perform_action_by_hci()
+            await asyncio.gather(*tasks)
+        else:
+            # ---- JEV path: batched env.step_jev() over the SAME threshold-
+            # activated agents, so JEV and classic are comparable. ----
+            await run_simulation_step(
+                env=_jev_env,
+                agent_graph=agent_graph,
+                step_index=timestep,
+                base_time=start_time,
+                use_jev=True,
+                active_predicate=hourly_threshold_predicate(simulation_time_hour),
+                jev_kwargs=({"config": _jev_cfg} if timestep == 1 else None),
+            )
 
     await twitter_channel.write_to_receive_queue((None, None, ActionType.EXIT))
     await twitter_task
