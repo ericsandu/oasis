@@ -143,13 +143,33 @@ async def running(
     )
     platform_task = asyncio.create_task(infra.running())
 
-    # Agent LLM for profile generation / CAMEL plumbing (upstream parity).
-    model = None
-    model_type = inference_configs.get("model_type", "gpt-4o-mini")
+    # Agent LLM. The paper runs Llama-3-8B-Instruct via a local vLLM server, so
+    # the CAMEL agents must talk to THAT server (OpenAI-compatible), not OpenAI.
+    # Build a VLLM-platform model pointed at the same base_url the JEV
+    # classifier uses (upstream pattern: ModelFactory.create(VLLM, url=...)).
+    # A "gpt*" model_type still routes to OpenAI for anyone who wants that.
+    model_type = (os.environ.get("JEV_VLLM_MODEL")
+                  or inference_configs.get("model_type")
+                  or "meta-llama/Meta-Llama-3-8B-Instruct")
+    vllm_url = (os.environ.get("JEV_VLLM_URL")
+                or inference_configs.get("base_url")
+                or "http://127.0.0.1:8000/v1")
+
     if str(model_type)[:3] == "gpt":
         model = ModelFactory.create(
             model_platform=ModelPlatformType.OPENAI,
             model_type=ModelType(model_type),
+        )
+    else:
+        # CAMEL's VLLM backend may still probe for an OpenAI-style key; vLLM
+        # ignores it, so set a dummy one to satisfy the client constructor.
+        os.environ.setdefault("OPENAI_API_KEY", "EMPTY")
+        os.environ.setdefault("VLLM_API_KEY", "EMPTY")
+        social_log.info("Agent model via vLLM: %s @ %s", model_type, vllm_url)
+        model = ModelFactory.create(
+            model_platform=ModelPlatformType.VLLM,
+            model_type=model_type,
+            url=vllm_url,
         )
 
     agent_graph = await generate_agents(
