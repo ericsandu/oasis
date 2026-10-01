@@ -1175,30 +1175,17 @@ class JEVEnvironment(OasisEnv):
             formatter = (
                 self.config.channel_formatter or default_oasis_channel_formatter
             )
-            # Assign each action a distinct sub-step time in micro-time order so
-            # reposts/likes don't all collapse to one created_at. We do NOT wait
-            # for the platform between actions -- that would serialize JEV's
-            # parallel dispatch (its whole point). The clock is bumped as the
-            # (already micro-time-sorted) queue is written; under async the
-            # platform may read a slightly later sub-step value for an early
-            # action, but ordering is approximately preserved and the recsys
-            # ranks by hot-score, not sub-step created_at, so this does not
-            # change recommendations.
-            _clock = getattr(self.platform, "sandbox_clock", None)
-            _base_step = getattr(_clock, "time_step", None) if _clock else None
+            # NOTE: sub-step created_at ordering is NOT done here. A previous
+            # attempt bumped sandbox_clock.time_step per action during drain,
+            # but the platform drains the channel in a SEPARATE async task and
+            # reads the clock at process time -- after we restore the integer
+            # step -- so every action was stamped with the same integer anyway
+            # (verified: all reposts shared one created_at). Faithful per-action
+            # timestamps require carrying created_at in the channel payload (a
+            # platform-contract change) or a post-step DB update; deferred.
             _recv = getattr(self.channel, "receive_queue", None)
-
-            def _advance_clock(item, idx, total):
-                if _clock is None or _base_step is None:
-                    return
-                _clock.time_step = _base_step + (idx + 1) / (total + 1)
-
             await self.action_queue.drain_to_channel(
-                self.channel, formatter=formatter, on_dispatch=_advance_clock)
-
-            # Restore the integer step after sub-step draining.
-            if _clock is not None and _base_step is not None:
-                _clock.time_step = _base_step
+                self.channel, formatter=formatter)
 
             if self.config.wait_for_platform and _recv is not None:
                 while not _recv.empty():
