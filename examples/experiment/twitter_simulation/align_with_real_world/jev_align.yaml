@@ -11,6 +11,12 @@ simulation:
   num_timesteps: 50          # paper F.2.2
   clock_factor: 60
   recsys_type: twhin-bert    # original OASIS recommender (not Gorse)
+  # Recsys cache: upstream default is 2, far too small to observe propagation
+  # depth (reposts never get recommended). Raise so reposts enter feeds and
+  # cascades can chain. Applies to classic AND JEV runs identically.
+  refresh_rec_post_count: 30
+  max_rec_post_len: 30
+  following_post_count: 10
   use_jev: true              # <-- the single switch; false = stock OASIS
   available_actions:
     - like_post

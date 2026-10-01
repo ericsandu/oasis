@@ -1167,12 +1167,37 @@ class JEVEnvironment(OasisEnv):
             formatter = (
                 self.config.channel_formatter or default_oasis_channel_formatter
             )
-            await self.action_queue.drain_to_channel(self.channel, formatter=formatter)
+            # Advance the sandbox clock in sub-step increments as actions drain
+            # in micro-time order, so earlier actions get earlier created_at
+            # (OASIS time model, paper 2.5). The platform reads created_at from
+            # sandbox_clock on each action, so we set a fractional time_step
+            # before each write and serialize write->process->next.
+            _clock = getattr(self.platform, "sandbox_clock", None)
+            _base_step = getattr(_clock, "time_step", None) if _clock else None
+            _recv = getattr(self.channel, "receive_queue", None)
 
-            if self.config.wait_for_platform and hasattr(
-                self.channel, "receive_queue"
-            ):
-                while not self.channel.receive_queue.empty():
+            async def _advance_clock(item, idx, total):
+                if _clock is None or _base_step is None:
+                    return
+                # Spread actions across (base_step, base_step + 1).
+                _clock.time_step = _base_step + (idx + 1) / (total + 1)
+                # Let the platform consume this action at the current sub-step
+                # before the next one bumps the clock.
+                if _recv is not None:
+                    for _ in range(50):
+                        if _recv.empty():
+                            break
+                        await asyncio.sleep(0.005)
+
+            await self.action_queue.drain_to_channel(
+                self.channel, formatter=formatter, on_dispatch=_advance_clock)
+
+            # Restore the integer step after sub-step draining.
+            if _clock is not None and _base_step is not None:
+                _clock.time_step = _base_step
+
+            if self.config.wait_for_platform and _recv is not None:
+                while not _recv.empty():
                     await asyncio.sleep(0.01)
                 # Allow platform task to commit final action to SQLite
                 await asyncio.sleep(0.05)

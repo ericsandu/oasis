@@ -88,6 +88,9 @@ async def running(
     num_timesteps: int = 3,
     clock_factor: int = 60,
     recsys_type: str = "twhin-bert",
+    refresh_rec_post_count: int = 2,
+    max_rec_post_len: int = 2,
+    following_post_count: int = 3,
     model_configs: dict[str, Any] | None = None,
     inference_configs: dict[str, Any] | None = None,
     available_actions: list[ActionType] = None,
@@ -111,9 +114,9 @@ async def running(
         clock,
         start_time,
         recsys_type=recsys_type,
-        refresh_rec_post_count=2,
-        max_rec_post_len=2,
-        following_post_count=3,
+        refresh_rec_post_count=refresh_rec_post_count,
+        max_rec_post_len=max_rec_post_len,
+        following_post_count=following_post_count,
     )
     twitter_task = asyncio.create_task(infra.running())
     # Prefer the runtime JEV_VLLM_URL (the sbatch picks a dynamic vLLM port) over

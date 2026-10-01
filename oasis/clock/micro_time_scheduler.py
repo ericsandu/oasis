@@ -582,6 +582,7 @@ class ChronologicalActionQueue:
         self,
         channel: Any,
         formatter: Callable[[ScheduledAction], Any] | None = None,
+        on_dispatch: Callable[[ScheduledAction, int, int], Any] | None = None,
     ) -> int:
         """Drain all actions in chronological order and dispatch them to the OASIS Channel.
 
@@ -589,12 +590,22 @@ class ChronologicalActionQueue:
             channel: Target OASIS Channel instance or async message sink.
             formatter: Optional callback to format ScheduledAction into custom channel payload.
                 Defaults to (action.user_id, action.action_dict, action.iso_timestamp).
+            on_dispatch: Optional callback invoked BEFORE each action is written,
+                as on_dispatch(item, index, total). May be a coroutine. Used by
+                the JEV env to advance the sandbox clock sub-step per action so
+                earlier (micro-time-ordered) actions get earlier created_at
+                timestamps, matching the OASIS time model.
 
         Returns:
             Count of actions successfully dispatched.
         """
         actions = self.drain()
-        for item in actions:
+        _total = len(actions)
+        for _idx, item in enumerate(actions):
+            if on_dispatch is not None:
+                _r = on_dispatch(item, _idx, _total)
+                if asyncio.iscoroutine(_r):
+                    await _r
             if formatter is not None:
                 payload = formatter(item)
             else:
