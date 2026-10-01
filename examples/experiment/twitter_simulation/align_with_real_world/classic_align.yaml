@@ -1,0 +1,33 @@
+---
+# JEV-accelerated run of the ORIGINAL align_with_real_world experiment
+# (OASIS paper F.2.2 "Information Spreading in X"), driven directly by
+# examples/experiment/twitter_simulation/align_with_real_world/twitter_simulation_large.py
+# with the shared JEV hook (simulation.use_jev: false). Set use_jev:false to run
+# stock OASIS unchanged.
+data:
+  db_path: data/simu_db/classic_align_False_Business_0.db
+  csv_path: data/twitter_dataset/anonymous_topic_200_1h/False_Business_0.csv
+simulation:
+  num_timesteps: 50          # paper F.2.2
+  clock_factor: 60
+  recsys_type: twhin-bert    # original OASIS recommender (not Gorse)
+  # Recsys cache: upstream default is 2, far too small to observe propagation
+  # depth (reposts never get recommended). 10 lets reposts enter feeds and
+  # cascades chain, while keeping per-step classifier load manageable. Applies
+  # to classic AND JEV runs identically. Raise further if depth is still flat.
+  refresh_rec_post_count: 10
+  max_rec_post_len: 10
+  following_post_count: 5
+  use_jev: false              # <-- the single switch; false = stock OASIS
+  available_actions:
+    - like_post
+    - repost
+    - follow
+    - do_nothing
+inference:
+  model_type: meta-llama/Meta-Llama-3-8B-Instruct   # paper backend (App. C.4)
+  # server_url is ignored when JEV_VLLM_URL is exported (the sbatch sets it to
+  # the dynamic local vLLM port); kept here for standalone/manual runs.
+  server_url:
+    - host: 127.0.0.1
+      ports: [8000]
