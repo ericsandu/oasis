@@ -94,10 +94,17 @@ def _build_classifier(inference_configs: dict[str, Any]):
     # Env wins over YAML: the HPC runner resolves the model PATH and the
     # isolated vLLM port at job time and exports them, so a stale YAML value
     # must not override the live server the sbatch just started.
-    base_url = os.environ.get("VLLM_BASE_URL") or inference_configs.get(
-        "base_url") or "http://127.0.0.1:8000/v1"
-    model_name = os.environ.get("VLLM_MODEL") or inference_configs.get(
-        "model_type") or "meta-llama/Meta-Llama-3-8B-Instruct"
+    # Use JEV_-prefixed names: a VLLM_-prefixed env var trips vLLM's
+    # "Unknown vLLM environment variable" warning (it scans the VLLM_ prefix).
+    # VLLM_* kept only as a backward-compat fallback.
+    base_url = (os.environ.get("JEV_VLLM_URL")
+                or os.environ.get("VLLM_BASE_URL")
+                or inference_configs.get("base_url")
+                or "http://127.0.0.1:8000/v1")
+    model_name = (os.environ.get("JEV_VLLM_MODEL")
+                  or os.environ.get("VLLM_MODEL")
+                  or inference_configs.get("model_type")
+                  or "meta-llama/Meta-Llama-3-8B-Instruct")
     social_log.info(
         "JEV classifier backend: vLLM base_url=%s model=%s", base_url,
         model_name)

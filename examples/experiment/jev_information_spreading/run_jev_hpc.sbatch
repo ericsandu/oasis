@@ -116,6 +116,26 @@ else
     PY_EXEC="poetry run python"
 fi
 
+# Pre-flight: the chosen container MUST have OASIS's own runtime deps. The
+# upstream recsys imports sentence_transformers (pinned in pyproject), and the
+# agent path imports camel. An older/P0/bare-pytorch SIF lacks these and would
+# crash mid-import. Verify now and fail with the build instruction.
+if [ -n "$CONTAINER_RUN" ]; then
+    if ! $CONTAINER_RUN python3 -c "import sentence_transformers, camel" 2>/dev/null; then
+        echo "ERROR: the selected container (${CONTAINER_SIF}) is missing OASIS runtime" >&2
+        echo "       dependencies (sentence_transformers / camel). This is NOT a new" >&2
+        echo "       dependency -- sentence-transformers==3.0.0 is pinned in OASIS's own" >&2
+        echo "       pyproject.toml. The job picked an old/foreign SIF." >&2
+        echo "       Build the purpose-built image and re-submit:" >&2
+        echo "         apptainer build \\" >&2
+        echo "           examples/experiment/jev_information_spreading/jev_oasis.sif \\" >&2
+        echo "           examples/experiment/jev_information_spreading/jev_oasis.def" >&2
+        echo "       (or set CONTAINER_IMAGE=/path/to/a/complete/oasis.sif)" >&2
+        exit 1
+    fi
+    echo "✓ Container has OASIS runtime deps (sentence_transformers, camel)."
+fi
+
 # ---------------------------------------------------------------------------
 # 2. Resolve model: prefer a pre-downloaded dir under $HOME/models (-> /models).
 #    Paper baseline (OASIS App. C.4 / line 479): Llama-3-8B-Instruct is the
@@ -279,8 +299,8 @@ fi
 NUM_TIMESTEPS="${NUM_TIMESTEPS:-50}"
 echo "Running JEV driver (num_timesteps=${NUM_TIMESTEPS}) ..."
 $CONTAINER_RUN bash -c "
-export VLLM_BASE_URL='http://127.0.0.1:${VLLM_PORT}/v1'
-export VLLM_MODEL='${RESOLVED_MODEL}'
+export JEV_VLLM_URL='http://127.0.0.1:${VLLM_PORT}/v1'
+export JEV_VLLM_MODEL='${RESOLVED_MODEL}'
 exec python3 ${DRIVER_REL} \
     --config_path '${CONFIG}'
 "
