@@ -241,8 +241,14 @@ if __name__ == "__main__":
         with open(args.config_path, "r") as f:
             cfg = safe_load(f)
         data_params = cfg.get("data")
-        simulation_params = cfg.get("simulation")
-        inference_configs = cfg.get("inference")
+        simulation_params = cfg.get("simulation") or {}
+        inference_configs = cfg.get("inference") or {}
+
+        # use_jev may be placed under simulation (natural) or inference; keep it
+        # OUT of running()'s kwargs (it is read from inference_configs inside).
+        if "use_jev" in simulation_params:
+            inference_configs.setdefault(
+                "use_jev", simulation_params.pop("use_jev"))
 
         asyncio.run(
             running(**data_params,
