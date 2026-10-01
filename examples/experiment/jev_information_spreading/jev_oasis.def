@@ -12,7 +12,7 @@ From: nvidia/cuda:13.4.2-cudnn-runtime-ubuntu24.04
 #
 # CUDA 13 base matches the cluster's upgraded driver (590.48.01 / CUDA 13.1);
 # the old vllm/vllm-openai (cu121) SIF fails there with "No CUDA GPUs available".
-# `pip install vllm` pulls a CUDA-13-compatible torch, so we do NOT pin torch.
+# vLLM 0.23.0 pins torch 2.11.0 (CUDA-13 build) to match the driver.
 #
 # Ubuntu 24.04 base (glibc 2.39) so apptainer's fakeroot `faked` -- which needs
 # GLIBC_2.38 -- works; a 22.04 base (glibc 2.35) fails the build at fakeroot.
@@ -64,9 +64,12 @@ From: nvidia/cuda:13.4.2-cudnn-runtime-ubuntu24.04
     . /opt/venv/bin/activate
     pip install --no-cache-dir --upgrade pip setuptools wheel
 
-    # vLLM (brings a CUDA-13-compatible torch) + hf CLI. Not pinned: let vLLM
-    # choose the torch build that matches CUDA 13 / the host driver.
-    pip install --no-cache-dir vllm "huggingface_hub[cli]"
+    # vLLM pinned to 0.23.0: the LAST vLLM that supports transformers v4
+    # (>=4.56,!=5.*). vLLM 0.24+ requires transformers v5, but OASIS's
+    # camel-ai 0.2.90 and sentence-transformers 3.0.0 both require
+    # transformers <5 -- an irreconcilable conflict at latest vLLM. 0.23.0
+    # pins torch 2.11.0 (CUDA-13 build) so the GPU still works on driver 590.
+    pip install --no-cache-dir "vllm==0.23.0" "huggingface_hub[cli]"
 
     # OASIS dependencies from its pyproject (sentence-transformers, camel-ai,
     # pandas, igraph, ... -- needed for the recommender + agents). Install the
