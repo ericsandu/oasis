@@ -1063,6 +1063,35 @@ class JEVEnvironment(OasisEnv):
                 action_type = ActionType.CREATE_COMMENT
                 message = (res.post_id, res.comment_text or "")
                 action_name = "create_comment"
+            elif res.action_char == "F":
+                # Follow is user-targeted: in the feed-reaction model the
+                # agent follows the AUTHOR of the post it saw (paper §2.1).
+                # Derive followee_id from the post's author user_id.
+                followee_id = None
+                if isinstance(raw_post, dict):
+                    followee_id = (
+                        raw_post.get("user_id")
+                        or raw_post.get("author_id")
+                        or raw_post.get("author")
+                    )
+                else:
+                    followee_id = (
+                        getattr(raw_post, "user_id", None)
+                        or getattr(raw_post, "author_id", None)
+                    )
+                try:
+                    followee_id = int(followee_id) if followee_id is not None else None
+                except (ValueError, TypeError):
+                    followee_id = None
+                if followee_id is None or followee_id == res.user_id:
+                    # No valid author target (or self-follow): downgrade to skip.
+                    action_type = ActionType.DO_NOTHING
+                    message = None
+                    action_name = "do_nothing"
+                else:
+                    action_type = ActionType.FOLLOW
+                    message = followee_id
+                    action_name = "follow"
             else:  # "S"
                 action_type = ActionType.DO_NOTHING
                 message = None

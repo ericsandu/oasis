@@ -52,7 +52,7 @@ DEFAULT_VLLM_MODEL = os.environ.get(
     "VLLM_MODEL", "Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8"
 )
 
-DEFAULT_ACTION_TOKENS = ("L", "R", "Q", "C", "S")
+DEFAULT_ACTION_TOKENS = ("L", "R", "Q", "C", "F", "S")
 
 # Comprehensive token ID fallback maps across cl100k, o200k, Qwen, and LLaMA
 # for both bare single characters ('L') and leading-space tokens (' L')
@@ -61,6 +61,7 @@ DEFAULT_ACTION_TOKEN_MAP: dict[str, list[int]] = {
     "R": [49, 432, 460, 81, 82],
     "Q": [48, 1229, 1486, 80, 81],
     "C": [34, 356, 363, 66, 67],
+    "F": [37, 435, 434, 69, 70],
     "S": [50, 328, 336, 82, 83],
 }
 
@@ -75,8 +76,8 @@ ACTION_JSON_SCHEMA: dict[str, Any] = {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["L", "R", "Q", "C", "S"],
-                    "description": "Selected social interaction action: L (Like), R (Repost), Q (Quote), C (Comment), S (Skip)",
+                    "enum": ["L", "R", "Q", "C", "F", "S"],
+                    "description": "Selected social interaction action: L (Like), R (Repost), Q (Quote), C (Comment), F (Follow post author), S (Skip)",
                 }
             },
             "required": ["action"],
@@ -127,7 +128,7 @@ def _parse_json_action(raw_text: str) -> str:
 
     # 3. Regex key-value matching: "action": "L" or 'action': 'Like'
     kv_match = re.search(
-        r'["\'](?:action|reaction|decision|choice)["\']\s*:\s*["\']([LRQCS])["\']',
+        r'["\'](?:action|reaction|decision|choice)["\']\s*:\s*["\']([LRQCFS])["\']',
         text,
         re.IGNORECASE,
     )

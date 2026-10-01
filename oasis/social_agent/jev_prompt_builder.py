@@ -93,7 +93,7 @@ class JEVPromptBuilder:
     to maximize RadixAttention KV-cache prefix hits across multiple agents evaluating identical posts.
     """
 
-    VALID_ACTIONS: Sequence[str] = ("L", "R", "Q", "C", "S")
+    VALID_ACTIONS: Sequence[str] = ("L", "R", "Q", "C", "F", "S")
 
     @staticmethod
     def build_post_prefix(post: PostPrefixData) -> str:
@@ -270,7 +270,7 @@ class JEVPromptBuilder:
             return "S"
 
         # Check bracketed or parenthesized token: [L], (L), [R], (R), etc.
-        bracket_match = re.search(r"[\[\(]([LRQCS])[\]\)]", text, re.IGNORECASE)
+        bracket_match = re.search(r"[\[\(]([LRQCFS])[\]\)]", text, re.IGNORECASE)
         if bracket_match:
             return bracket_match.group(1).upper()
 
@@ -289,11 +289,13 @@ class JEVPromptBuilder:
             return "R"
         if "COMMENT" in upper_text:
             return "C"
+        if "FOLLOW" in upper_text:
+            return "F"
         if "SKIP" in upper_text:
             return "S"
 
         # Check word boundary regex for isolated action characters
-        isolated_match = re.search(r"\b([LRQCS])\b", upper_text)
+        isolated_match = re.search(r"\b([LRQCFS])\b", upper_text)
         if isolated_match:
             return isolated_match.group(1).upper()
 
