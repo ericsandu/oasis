@@ -1,80 +1,86 @@
 Bootstrap: docker
-From: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
+From: nvidia/cuda:13.4.2-cudnn-runtime-ubuntu24.04
 
 # =============================================================================
-# Apptainer image for the JEV Information-Spreading reproduction.
+# Minimal Apptainer image for the JEV / OASIS Information-Spreading reproduction.
 #
-# Ported from the ORIGINAL cib-modular/jev-optimization oasis.def that targets
-# the cluster's CURRENT driver. The previous SIF was built on
-# vllm/vllm-openai:latest (torch cu121) and now fails on dgxa100 nodes with
-# "No CUDA GPUs are available" because those nodes were upgraded to driver
-# 590.48.01 / CUDA 13.1 -- too new for cu121 torch (nvidia-smi sees the GPU but
-# torch.cuda.is_available() is False).
+# Grounded in OASIS's own documented requirements:
+#   * Python >=3.10,<3.12            (pyproject requires-python)
+#   * OASIS via pip (`pip install -e .`)   (docs/quickstart.mdx)
+#   * vLLM installed SEPARATELY as the model server  (docs: "Set up VLLM")
+#   * huggingface_hub for model download             (docs)
 #
-# This base (CUDA 13.3.1, Ubuntu 24.04) matches the new driver, installs the
-# latest torch + vLLM (CUDA 13-compatible), and Ubuntu 24.04's newer glibc also
-# avoids the fakeroot/GLIBC build failure seen with the 22.04-based base.
+# CUDA 13 base matches the cluster's upgraded driver (590.48.01 / CUDA 13.1);
+# the old vllm/vllm-openai (cu121) SIF fails there with "No CUDA GPUs available".
+# `pip install vllm` pulls a CUDA-13-compatible torch, so we do NOT pin torch.
 #
-# OASIS deps come from the repo's pyproject.toml via Poetry; only pyproject.toml
-# is copied in, so the build never touches the (symlink-messy) working tree.
+# Ubuntu 24.04 base (glibc 2.39) so apptainer's fakeroot `faked` -- which needs
+# GLIBC_2.38 -- works; a 22.04 base (glibc 2.35) fails the build at fakeroot.
+# 24.04 ships Python 3.12, which violates OASIS's requires-python <3.12, so we
+# install deadsnakes Python 3.11 into a venv: 24.04 for fakeroot safety, 3.11
+# for OASIS compatibility.
 #
-# Build from the repo root (so %files finds pyproject.toml):
-#     apptainer build \
-#       examples/experiment/jev_information_spreading/jev_oasis.sif \
-#       examples/experiment/jev_information_spreading/jev_oasis.def
+# Only pyproject.toml is copied in (OASIS code is bind-mounted at /app at run
+# time), so the build never touches the working tree's broken symlinks.
+#
+# Build from the repo root:
+#   srun --partition=haswell --cpus-per-task=32 --mem=32GB apptainer build \
+#     examples/experiment/jev_information_spreading/jev_oasis.sif \
+#     examples/experiment/jev_information_spreading/jev_oasis.def
 # =============================================================================
 
 %labels
-    Maintainer CIB-Propagation Team
-    Purpose    "JEV Information-Spreading reproduction (OASIS paper F.2.2)"
-    Branch     "feat/jev-engine-core"
-    Base       "nvidia/cuda:13.3.1 / torch+vLLM latest (matches driver 590/CUDA13.1)"
+    Purpose "JEV / OASIS Information-Spreading reproduction (CUDA 13, py3.11)"
+    Branch  "feat/jev-engine-core"
 
 %files
     pyproject.toml /app/pyproject.toml
 
 %environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONPATH=/app:$PYTHONPATH
+    export PYTHONUNBUFFERED=1
     export LC_ALL=C.UTF-8
     export LANG=C.UTF-8
-    export PATH=/usr/local/bin:/root/.local/bin:$PATH
-    export PYTHONPATH=/app:$PYTHONPATH
-    export PIP_BREAK_SYSTEM_PACKAGES=1
-    export PYTHONUNBUFFERED=1
 
 %post
+    set -eux
     export DEBIAN_FRONTEND=noninteractive
-    export PIP_BREAK_SYSTEM_PACKAGES=1
 
-    # 1. System dependencies
-    apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        libcairo2-dev \
-        pkg-config \
-        python3 \
-        python3-pip \
-        python3-dev \
-        wget \
-        unzip \
-        curl \
-        git \
-        && rm -rf /var/lib/apt/lists/*
+    # Python 3.11 (OASIS requires >=3.10,<3.12; Ubuntu 22.04 ships 3.10, but
+    # deadsnakes 3.11 is the safe pin) + minimal build/runtime tools.
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates curl git \
+        build-essential pkg-config libcairo2-dev
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        python3.11 python3.11-venv python3.11-dev
+    rm -rf /var/lib/apt/lists/*
 
-    # 2. PyTorch + vLLM (LATEST, built against CUDA 13 to match the host driver)
-    #    plus Poetry and the hf CLI for first-run model download.
-    echo "Installing Poetry, PyTorch, vLLM (latest, CUDA 13)..."
-    pip install --no-cache-dir poetry torch torchvision torchaudio vllm
-    pip install --no-cache-dir "huggingface_hub[cli]>=0.34"
+    # Isolated venv on 3.11.
+    python3.11 -m venv /opt/venv
+    . /opt/venv/bin/activate
+    pip install --no-cache-dir --upgrade pip setuptools wheel
 
-    # 3. OASIS dependencies from pyproject.toml (brings sentence-transformers,
-    #    camel-ai, sklearn, etc. -- required for recommender parity). The repo
-    #    code itself is bind-mounted at /app at run time.
-    echo "Installing OASIS dependencies via Poetry..."
-    cd /app
-    poetry config virtualenvs.create false
-    poetry install --no-root --no-interaction --no-ansi
+    # vLLM (brings a CUDA-13-compatible torch) + hf CLI. Not pinned: let vLLM
+    # choose the torch build that matches CUDA 13 / the host driver.
+    pip install --no-cache-dir vllm "huggingface_hub[cli]"
 
-    # 4. Container mount points (repo + models + outputs bound at run time)
-    mkdir -p /app /models /data /experiments /workspace
+    # OASIS dependencies from its pyproject (sentence-transformers, camel-ai,
+    # pandas, igraph, ... -- needed for the recommender + agents). Install the
+    # pinned deps without the project root; the code is bind-mounted at run time.
+    pip install --no-cache-dir \
+        "camel-ai==0.2.90" \
+        "sentence-transformers==3.0.0" \
+        "pandas==2.2.2" \
+        "igraph==0.11.6" \
+        "cairocffi==1.7.1" \
+        "pillow==10.3.0" \
+        "scikit-learn" "numpy" "httpx" "pyyaml" "colorama"
+
+    mkdir -p /app /models /data /experiments
 
 %runscript
     exec "$@"
