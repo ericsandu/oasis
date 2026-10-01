@@ -142,11 +142,20 @@ if [ -z "$RESOLVED_MODEL" ]; then
     fi
     # huggingface-cli was renamed to `hf` (huggingface_hub >= 1.x); the old
     # command is deprecated. Prefer `hf`, fall back to huggingface-cli for
-    # older images. Note: --local-dir-use-symlinks was REMOVED (local-dir is
-    # always a real copy now), so it is not passed.
+    # older images. Notes:
+    #  - --local-dir-use-symlinks was REMOVED (local-dir is always a real copy).
+    #  - Each exclude pattern needs its OWN --exclude flag. Passing a second
+    #    bare pattern after --exclude makes `hf` treat it as an explicit
+    #    FILENAME to fetch (it then ignores --exclude and 404s on 'original/*').
+    #  - We skip the consolidated original/*.pth checkpoint; vLLM loads the
+    #    safetensors shards. Set DOWNLOAD_ALL=1 to fetch everything instead.
     build_dl_cmd() {
         # $1 = cli binary name
-        echo "$1 download '${PAPER_MODEL_REPO}' --local-dir '${DEST}' --exclude '*.pth' 'original/*'"
+        local excl=""
+        if [ "${DOWNLOAD_ALL:-0}" != "1" ]; then
+            excl="--exclude '*.pth' --exclude 'original/*'"
+        fi
+        echo "$1 download '${PAPER_MODEL_REPO}' --local-dir '${DEST}' ${excl}"
     }
     run_download() {
         # Runs inside the container when CONTAINER_RUN is set, else on host.
