@@ -76,14 +76,14 @@ line 479; the ablation also tried `Qwen/Qwen1.5-7B-Chat` and
 by default.
 
 **First-run download + reuse:** if `~/models/Meta-Llama-3-8B-Instruct` is not
-present, the runner downloads it there once via `huggingface-cli download
+present, the runner downloads it there once via `hf download
 --local-dir ~/models/Meta-Llama-3-8B-Instruct` and reuses it on every later run.
 Because the download must reach the hub, the offline env is lifted *only* for
 that step; the vLLM server still runs fully offline against the cached dir.
 
 > ⚠️ **Meta-Llama-3 is a GATED HuggingFace repo.** Before the first run, on an
 > ONLINE node: request access on the model page, then either `export HF_TOKEN=...`
-> (passed through to the download) or run `huggingface-cli login`. Subsequent
+> (passed through to the download) or run `hf auth login`. Subsequent
 > runs need no network for the model.
 
 Override the model: `MODEL_PATH=/models/<dir>` to pin a local one, or

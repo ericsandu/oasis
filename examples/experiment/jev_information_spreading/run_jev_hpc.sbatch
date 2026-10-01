@@ -130,29 +130,45 @@ for m in "${MODEL_CANDIDATES[@]}"; do
 done
 
 # Not found locally: download the paper model into $HOME/models for reuse.
-# NOTE: Meta-Llama-3 is a GATED HF repo -- export HF_TOKEN (or run
-# `huggingface-cli login`) on an ONLINE node before first use. Subsequent runs
-# reuse the cached weights and run fully offline.
+# NOTE: Meta-Llama-3 is a GATED HF repo -- export HF_TOKEN (or run `hf auth
+# login`) on an ONLINE node before first use. Subsequent runs reuse the cached
+# weights and run fully offline.
 if [ -z "$RESOLVED_MODEL" ]; then
     DEST="${HOST_MODELS_DIR}/${MODEL_LOCAL_NAME}"
     echo "Model not found locally. Downloading ${PAPER_MODEL_REPO} -> ${DEST} (first run only) ..."
     if [ -z "${HF_TOKEN:-}" ]; then
         echo "WARNING: HF_TOKEN not set. ${PAPER_MODEL_REPO} is gated; the download"
-        echo "         will fail unless you have already run 'huggingface-cli login'."
+        echo "         will fail unless you have already run 'hf auth login'."
     fi
-    DL_CMD="huggingface-cli download '${PAPER_MODEL_REPO}' \
-        --local-dir '${DEST}' --local-dir-use-symlinks False \
-        --exclude '*.pth' 'original/*'"
-    if [ -n "$CONTAINER_RUN" ]; then
-        # Download must reach the hub, so run it WITHOUT the offline env.
-        $CONTAINER_RUN bash -c "export HF_TOKEN='${HF_TOKEN:-}'; \
-            unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE; ${DL_CMD}"
-    elif command -v huggingface-cli &> /dev/null; then
-        HF_TOKEN="${HF_TOKEN:-}" eval "$DL_CMD"
-    else
-        echo "ERROR: huggingface-cli unavailable and model not cached. Cannot proceed."
-        exit 1
-    fi
+    # huggingface-cli was renamed to `hf` (huggingface_hub >= 1.x); the old
+    # command is deprecated. Prefer `hf`, fall back to huggingface-cli for
+    # older images. Note: --local-dir-use-symlinks was REMOVED (local-dir is
+    # always a real copy now), so it is not passed.
+    build_dl_cmd() {
+        # $1 = cli binary name
+        echo "$1 download '${PAPER_MODEL_REPO}' --local-dir '${DEST}' --exclude '*.pth' 'original/*'"
+    }
+    run_download() {
+        # Runs inside the container when CONTAINER_RUN is set, else on host.
+        local inner="
+            export HF_TOKEN='${HF_TOKEN:-}'
+            unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE
+            if command -v hf >/dev/null 2>&1; then
+                $(build_dl_cmd hf)
+            elif command -v huggingface-cli >/dev/null 2>&1; then
+                $(build_dl_cmd huggingface-cli)
+            else
+                echo 'ERROR: neither hf nor huggingface-cli is available.' >&2
+                exit 1
+            fi
+        "
+        if [ -n "$CONTAINER_RUN" ]; then
+            $CONTAINER_RUN bash -c "$inner"
+        else
+            bash -c "$inner"
+        fi
+    }
+    run_download
     if [ -d "$DEST" ] && [ -n "$(ls -A "$DEST" 2>/dev/null)" ]; then
         RESOLVED_MODEL="/models/${MODEL_LOCAL_NAME}"   # path as seen inside container
         [ -z "$CONTAINER_RUN" ] && RESOLVED_MODEL="$DEST"

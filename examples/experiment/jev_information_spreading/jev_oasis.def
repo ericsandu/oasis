@@ -45,7 +45,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
         "camel-ai==0.2.90" \
         "sentence-transformers==3.0.0" \
         "pandas==2.2.2" \
-        "huggingface_hub[cli]" \
+        "huggingface_hub[cli]>=0.34" \
         httpx pyyaml colorama scikit-learn numpy
 
     # Install the repo itself (editable so the mounted source wins at runtime).
