@@ -37,8 +37,10 @@ new user"*). It fits JEV's per-(agent, post) 1-token model cleanly.
   harness but drives the sim with `OasisEnv.step_jev()` (sole step driver, so
   the clock advances strictly by +1 — avoids bug T-08).
 - `jev_information_spreading.yaml` — config encoding the F.2.2 baseline.
-- `jev_oasis.def` — Apptainer image (Python 3.11 + torch/CUDA 12.1 + vLLM +
-  OASIS deps).
+- `jev_oasis.def` — Apptainer image, built on `vllm/vllm-openai:latest` (same
+  proven base as the P0 `oasis_base.sif`: vLLM + PyTorch + CUDA preinstalled).
+  OASIS deps come from the repo's `pyproject.toml` via Poetry; only
+  `pyproject.toml` is copied in, so the build never touches the working tree.
 - `run_jev_hpc.sbatch` — SLURM job: starts vLLM in-container, waits for health,
   runs the driver, tears down.
 
@@ -47,10 +49,19 @@ new user"*). It fits JEV's per-(agent, post) 1-token model cleanly.
 ```bash
 # From the repository root, on the feat/jev-engine-core branch:
 
-# 1) Build the image (on a build node with internet + fakeroot):
+# 1) Build the image. MUST run from the repo root so %files finds pyproject.toml.
 apptainer build \
     examples/experiment/jev_information_spreading/jev_oasis.sif \
     examples/experiment/jev_information_spreading/jev_oasis.def
+# If the build fails at the fakeroot stage with a GLIBC error from `faked`
+# (host libc too old for the base image's fakeroot), retry with:
+#   apptainer build --ignore-fakeroot-command ... jev_oasis.def
+# or build on a node whose glibc matches, or `apptainer build --remote`.
+#
+# You can also SKIP building: this image shares the vllm/vllm-openai base with
+# the P0 oasis_base.sif, which already has sentence-transformers via Poetry, so
+#   CONTAINER_IMAGE=$HOME/.../oasis_base.sif sbatch run_jev_hpc.sbatch
+# works too -- the runner's preflight will confirm the deps are present.
 
 # 2) Submit the job (UPB-grid defaults baked in: account=phd, partition=dgxa100):
 sbatch examples/experiment/jev_information_spreading/run_jev_hpc.sbatch
