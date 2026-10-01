@@ -4,7 +4,7 @@
 #SBATCH --job-name=jev_compare
 #SBATCH --account=phd
 #SBATCH --partition=dgxa100
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:tesla_a100:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --output=slurm_jev_compare_%j.out
@@ -14,6 +14,7 @@ set -eo pipefail
 REPO="${SLURM_SUBMIT_DIR:-$HOME/eric_sandu/oasis}"
 SIF="$HOME/eric_sandu/oasis.sif"
 cd "$REPO"
+nvidia-smi || true   # confirm the host sees the GPU before launching vLLM
 ALIGN=examples/experiment/twitter_simulation/align_with_real_world
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 VLLM_NO_USAGE_STATS=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True" VLLM_USE_FLASHINFER_SAMPLER=0
