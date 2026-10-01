@@ -966,13 +966,21 @@ class JEVEnvironment(OasisEnv):
         # Stage d: Batch classification with 1-token logit biasing
         total_evals = len(eval_items)
         if self.config.batch_size > 0 and len(eval_items) > self.config.batch_size:
+            # Fire all chunks CONCURRENTLY: vLLM batches them server-side, so
+            # the GPU stays saturated instead of idling between serial
+            # round-trips (observed GPU KV-cache usage was ~2% with the old
+            # serial await loop). Preserves ordering by gathering in order.
+            chunks = [
+                eval_items[i : i + self.config.batch_size]
+                for i in range(0, len(eval_items), self.config.batch_size)
+            ]
+            chunk_results_list = await asyncio.gather(*[
+                self.classifier_client.classify_batch(c, generate_comments=False)
+                for c in chunks
+            ])
             raw_results: list[ClassificationResult] = []
-            for i in range(0, len(eval_items), self.config.batch_size):
-                chunk = eval_items[i : i + self.config.batch_size]
-                chunk_results = await self.classifier_client.classify_batch(
-                    chunk, generate_comments=False
-                )
-                raw_results.extend(chunk_results)
+            for cr in chunk_results_list:
+                raw_results.extend(cr)
         else:
             raw_results = await self.classifier_client.classify_batch(
                 eval_items, generate_comments=False
