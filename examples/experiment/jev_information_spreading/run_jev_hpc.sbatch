@@ -51,7 +51,7 @@ cd "${OASIS_DIR}"
 
 # Relative path (inside the repo) of the JEV driver -- used for both the
 # host-side sanity check and the in-container invocation.
-DRIVER_REL="examples/experiment/jev_information_spreading/jev_information_spreading.py"
+DRIVER_REL="examples/experiment/twitter_simulation/align_with_real_world/twitter_simulation_large.py"
 
 # Pre-flight: the repo root we are about to mount as /app MUST contain the
 # driver. If it does not, SLURM_SUBMIT_DIR pointed somewhere other than the
@@ -73,7 +73,7 @@ EXP_DIR="${OASIS_DIR}/experiments/jev_infospread_${TIMESTAMP}"
 DATA_DIR="${OASIS_DIR}/data/simu_db"
 mkdir -p "${EXP_DIR}" "${DATA_DIR}" "${OASIS_DIR}/experiments"
 DB_PATH="${EXP_DIR}/jev_information_spreading.db"
-CONFIG="${CONFIG:-examples/experiment/jev_information_spreading/jev_information_spreading.yaml}"
+CONFIG="${CONFIG:-examples/experiment/twitter_simulation/align_with_real_world/jev_align.yaml}"
 
 echo "===================================================================="
 echo "JEV Information-Spreading (OASIS F.2.2) on node: $(hostname)"
@@ -301,6 +301,7 @@ echo "Running JEV driver (num_timesteps=${NUM_TIMESTEPS}) ..."
 $CONTAINER_RUN bash -c "
 export JEV_VLLM_URL='http://127.0.0.1:${VLLM_PORT}/v1'
 export JEV_VLLM_MODEL='${RESOLVED_MODEL}'
+export OASIS_USE_JEV=1
 exec python3 ${DRIVER_REL} \
     --config_path '${CONFIG}'
 "

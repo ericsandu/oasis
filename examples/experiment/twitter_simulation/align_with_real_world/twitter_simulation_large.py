@@ -41,6 +41,15 @@ from oasis.social_platform.channel import Channel
 from oasis.social_platform.platform import Platform
 from oasis.social_platform.typing import ActionType
 
+# JEV acceleration (opt-in). The shared helper decides classic vs batched JEV
+# stepping; enable with OASIS_USE_JEV=1 or simulation.use_jev in the YAML.
+from oasis.environment.env import OasisEnv
+from oasis.environment.jev_runner import (
+    jev_enabled,
+    run_simulation_step,
+    hourly_threshold_predicate,
+)
+
 social_log = logging.getLogger(name="social")
 social_log.propagate = False
 social_log.setLevel("DEBUG")
@@ -107,7 +116,13 @@ async def running(
         following_post_count=3,
     )
     twitter_task = asyncio.create_task(infra.running())
-    model_urls = create_model_urls(inference_configs["server_url"])
+    # Prefer the runtime JEV_VLLM_URL (the sbatch picks a dynamic vLLM port) over
+    # a static server_url in the YAML, so the config need not know the port.
+    _env_url = os.environ.get("JEV_VLLM_URL")
+    if _env_url:
+        model_urls = [_env_url]
+    else:
+        model_urls = create_model_urls(inference_configs["server_url"])
     models = [
         ModelFactory.create(
             model_platform=ModelPlatformType.VLLM,
@@ -143,6 +158,54 @@ async def running(
                                         twitter=infra)
     # agent_graph.visualize("initial_social_graph.png")
 
+    # --- JEV acceleration setup (opt-in; classic path untouched when off) ---
+    _use_jev = jev_enabled((inference_configs or {}).get("use_jev"))
+    _jev_env = None
+    _jev_cfg = None
+    if _use_jev:
+        from oasis.environment.jev_env import JEVExecutionConfig
+        from oasis.inference.jev_classifier import (
+            DEFAULT_ACTION_TOKEN_MAP, VLLMJEVClassifierClient)
+        # Build the classifier against the same vLLM server, restricted to the
+        # action set OASIS was given for this scenario (available_actions).
+        # available_actions entries may be ActionType OR action-name strings
+        # (the yaml_200 configs use strings like "like_post"); handle both.
+        char_by_name = {
+            "like_post": "L", "repost": "R", "quote_post": "Q",
+            "create_comment": "C", "follow": "F", "do_nothing": "S",
+        }
+
+        def _action_char(a):
+            name = getattr(a, "value", a)  # ActionType.value or raw string
+            return char_by_name.get(str(name))
+
+        allowed_chars = [c for c in (_action_char(a)
+                         for a in (available_actions or [])) if c] \
+            or ["L", "R", "F", "S"]
+        if "S" not in allowed_chars:
+            allowed_chars.append("S")
+        logit_bias = {}
+        for ch in allowed_chars:
+            for tid in DEFAULT_ACTION_TOKEN_MAP.get(ch, []):
+                logit_bias[tid] = 50.0
+        token_id_map = {ch: DEFAULT_ACTION_TOKEN_MAP[ch][0]
+                        for ch in allowed_chars if ch in DEFAULT_ACTION_TOKEN_MAP}
+        jev_url = os.environ.get("JEV_VLLM_URL") or (
+            inference_configs or {}).get("base_url", "http://127.0.0.1:8000/v1")
+        jev_model = os.environ.get("JEV_VLLM_MODEL") or (
+            inference_configs or {}).get("model_type", "")
+        os.environ.setdefault("OPENAI_API_KEY", "EMPTY")
+        social_log.info("JEV ENABLED: actions=%s url=%s", allowed_chars, jev_url)
+        _jev_cfg = JEVExecutionConfig(
+            classifier_client=VLLMJEVClassifierClient(
+                base_url=jev_url, model_name=jev_model,
+                logit_bias=logit_bias, token_id_map=token_id_map),
+            max_actions_per_agent=1,
+            enable_belief_updates=False,
+        )
+        _jev_env = OasisEnv(agent_graph=agent_graph, platform=infra,
+                            database_path=db_path)
+
     for timestep in range(1, num_timesteps + 1):
         clock.time_step = timestep * 3
         social_log.info(f"timestep:{timestep}")
@@ -153,18 +216,18 @@ async def running(
 
         # 0.05 * timestep here means 3 minutes / timestep
         simulation_time_hour = start_hour + 0.05 * timestep
-        tasks = []
-        for node_id, agent in agent_graph.get_agents():
-            if agent.user_info.is_controllable is False:
-                agent_ac_prob = random.random()
-                threshold = agent.user_info.profile["other_info"][
-                    "active_threshold"][int(simulation_time_hour % 24)]
-                if agent_ac_prob < threshold:
-                    tasks.append(agent.perform_action_by_llm())
-            else:
-                await agent.perform_action_by_hci()
-
-        await asyncio.gather(*tasks)
+        # Shared JEV hook: classic per-agent stepping when JEV is off (behavior
+        # identical to upstream), or one batched env.step_jev() when on.
+        await run_simulation_step(
+            env=_jev_env,
+            agent_graph=agent_graph,
+            step_index=timestep,
+            base_time=start_time,
+            use_jev=_use_jev,
+            active_predicate=hourly_threshold_predicate(simulation_time_hour),
+            jev_kwargs=({"config": _jev_cfg} if (_use_jev and timestep == 1)
+                        else None),
+        )
         # agent_graph.visualize(f"timestep_{timestep}_social_graph.png")
 
     await twitter_channel.write_to_receive_queue((None, None, ActionType.EXIT))
