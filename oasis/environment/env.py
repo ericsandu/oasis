@@ -117,6 +117,11 @@ class OasisEnv:
                 f"Invalid platform: {platform}. You should pass a "
                 "DefaultPlatformType or a Platform instance.")
 
+        # JEVEnvironment reads env.database_path when bridging via step_jev.
+        # (Set here rather than inside the omitted sync_agents_to_db helper.)
+        self.database_path = database_path or getattr(
+            self.platform, "db_path", None)
+
     async def reset(self) -> None:
         r"""Start the platform and sign up the agents."""
         self.platform_task = asyncio.create_task(self.platform.running())
