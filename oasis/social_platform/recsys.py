@@ -23,36 +23,13 @@ from math import log
 from typing import Any, Dict, List
 
 import numpy as np
+import torch
+from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-# Heavy ML deps are made OPTIONAL here (guarded imports) so this module loads
-# on container images that lack the full ML stack -- the JEV engine drives the
-# sim via platform.refresh and does not require the SentenceTransformer
-# embedding path. Recsys degrades to its non-embedding behavior when these are
-# absent. (Behavior mirrors the origin branch; upstream imported these hard.)
-try:
-    import torch
-except (ImportError, Exception):
-    torch = None
-
-try:
-    from sentence_transformers import SentenceTransformer
-except (ImportError, Exception):
-    SentenceTransformer = None
-
-try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-except (ImportError, Exception):
-    TfidfVectorizer = None
-    cosine_similarity = None
-
-try:
-    from .process_recsys_posts import (generate_post_vector,
-                                       generate_post_vector_openai)
-except (ImportError, Exception):
-    generate_post_vector = None
-    generate_post_vector_openai = None
-
+from .process_recsys_posts import (generate_post_vector,
+                                   generate_post_vector_openai)
 from .typing import ActionType, RecsysType
 
 rec_log = logging.getLogger(name='social.rec')
