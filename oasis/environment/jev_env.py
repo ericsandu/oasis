@@ -1167,27 +1167,23 @@ class JEVEnvironment(OasisEnv):
             formatter = (
                 self.config.channel_formatter or default_oasis_channel_formatter
             )
-            # Advance the sandbox clock in sub-step increments as actions drain
-            # in micro-time order, so earlier actions get earlier created_at
-            # (OASIS time model, paper 2.5). The platform reads created_at from
-            # sandbox_clock on each action, so we set a fractional time_step
-            # before each write and serialize write->process->next.
+            # Assign each action a distinct sub-step time in micro-time order so
+            # reposts/likes don't all collapse to one created_at. We do NOT wait
+            # for the platform between actions -- that would serialize JEV's
+            # parallel dispatch (its whole point). The clock is bumped as the
+            # (already micro-time-sorted) queue is written; under async the
+            # platform may read a slightly later sub-step value for an early
+            # action, but ordering is approximately preserved and the recsys
+            # ranks by hot-score, not sub-step created_at, so this does not
+            # change recommendations.
             _clock = getattr(self.platform, "sandbox_clock", None)
             _base_step = getattr(_clock, "time_step", None) if _clock else None
             _recv = getattr(self.channel, "receive_queue", None)
 
-            async def _advance_clock(item, idx, total):
+            def _advance_clock(item, idx, total):
                 if _clock is None or _base_step is None:
                     return
-                # Spread actions across (base_step, base_step + 1).
                 _clock.time_step = _base_step + (idx + 1) / (total + 1)
-                # Let the platform consume this action at the current sub-step
-                # before the next one bumps the clock.
-                if _recv is not None:
-                    for _ in range(50):
-                        if _recv.empty():
-                            break
-                        await asyncio.sleep(0.005)
 
             await self.action_queue.drain_to_channel(
                 self.channel, formatter=formatter, on_dispatch=_advance_clock)
