@@ -124,6 +124,11 @@ class JEVExecutionConfig:
     # builder so the task instruction lists ONLY these actions -- never a
     # hardcoded menu. None => all VALID_ACTIONS.
     allowed_actions: Sequence[str] | None = None
+    # WHOLE-FEED experiment: when True, each agent gets ONE guided-JSON call over
+    # its entire feed (pick one post + action), instead of one 1-token call per
+    # (agent,post). Sacrifices per-post KV-cache sharing; tests whether
+    # feed-level comparative context restores reposting. Default False (per-post).
+    feed_mode: bool = False
     default_topic: str = "general"
     seed: int | None = None
     downgrade_to_skip: bool = True
@@ -1016,7 +1021,38 @@ class JEVEnvironment(OasisEnv):
 
         # Stage d: Batch classification with 1-token logit biasing
         total_evals = len(eval_items)
-        if self.config.batch_size > 0 and len(eval_items) > self.config.batch_size:
+        if self.config.feed_mode:
+            # WHOLE-FEED mode: one guided-JSON call per agent over its full feed.
+            # Build (user_id, feed_prompt, valid_post_ids) per agent from the
+            # posts already prefix-built above (grouped via item_context).
+            by_agent: dict[int, list[PostPrefixData]] = {}
+            for (uid, pid), (pp, _sfx, _rp, _af) in item_context.items():
+                by_agent.setdefault(uid, []).append(pp)
+            # one suffix per agent (audience/persona) -- reuse any item's suffix
+            suffix_by_agent: dict[int, AgentSuffixData] = {}
+            for (uid, pid), (_pp, sfx, _rp, _af) in item_context.items():
+                suffix_by_agent.setdefault(uid, sfx)
+            feed_items = []
+            for uid, pps in by_agent.items():
+                prompt = JEVPromptBuilder.build_feed_prompt(
+                    suffix_by_agent[uid], pps,
+                    allowed_chars=self.config.allowed_actions,
+                )
+                feed_items.append((uid, prompt, [p.post_id for p in pps]))
+            feed_choices = await self.classifier_client.classify_feed(
+                feed_items, allowed_chars=self.config.allowed_actions
+            )
+            raw_results = []
+            for uid, pid, act in feed_choices:
+                if pid is None:
+                    # pick any post for context; action S
+                    pid = by_agent[uid][0].post_id if by_agent.get(uid) else 0
+                    act = "S"
+                raw_results.append(ClassificationResult(
+                    user_id=uid, post_id=pid, action_char=act,
+                    confidence=1.0, logits={act: 1.0},
+                ))
+        elif self.config.batch_size > 0 and len(eval_items) > self.config.batch_size:
             # Fire all chunks CONCURRENTLY: vLLM batches them server-side, so
             # the GPU stays saturated instead of idling between serial
             # round-trips (observed GPU KV-cache usage was ~2% with the old

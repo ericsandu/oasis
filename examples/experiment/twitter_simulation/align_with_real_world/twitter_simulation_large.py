@@ -249,6 +249,9 @@ async def running(
             # JEV task-instruction prompt lists ONLY these actions, matching what
             # a classic agent would be given -- not a hardcoded menu.
             allowed_actions=allowed_chars,
+            # WHOLE-FEED experiment toggle (OASIS_JEV_FEED_MODE=1): one call per
+            # agent over the full feed instead of per-post. Default off.
+            feed_mode=(os.environ.get("OASIS_JEV_FEED_MODE", "0") == "1"),
             # The driver already calls infra.update_rec_table() once per step
             # (the expensive twhin-BERT embedding pass). Don't let step_jev run
             # it a SECOND time -- that doubled the heaviest op every step.

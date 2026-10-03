@@ -1066,6 +1066,86 @@ class VLLMJEVClassifierClient:
 
         return results
 
+    async def classify_feed(
+        self,
+        feed_items: list,
+        allowed_chars: list | None = None,
+    ) -> list:
+        """WHOLE-FEED variant: one guided-JSON call per agent over their ENTIRE
+        feed, instead of one 1-token call per (agent,post). This mirrors base
+        OASIS classic (agent sees the whole feed and SELECTS one post + action),
+        testing whether comparative/feed-level context restores reposting that
+        the per-post isolated framing suppresses.
+
+        CACHING NOTE: loses the per-post cross-agent prefix sharing (each agent's
+        feed is a distinct post set); only the root TASK instruction stays
+        shared. This is the deliberate speed/fidelity trade of this experiment.
+
+        Args:
+            feed_items: list of (user_id, feed_prompt, valid_post_ids) tuples.
+            allowed_chars: enabled action letters (for the JSON enum).
+
+        Returns:
+            list of (user_id, chosen_post_id|None, action_char) tuples.
+        """
+        if not feed_items:
+            return []
+        actions = [c for c in (allowed_chars or ["L", "R", "F", "S"]) if c]
+        if "S" not in actions:
+            actions.append("S")
+        schema = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "feed_action",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "post_id": {"type": "integer"},
+                        "action": {"type": "string", "enum": actions},
+                    },
+                    "required": ["post_id", "action"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+        endpoint = f"{self.base_url}/chat/completions"
+
+        async def _one(user_id, prompt, valid_ids):
+            payload = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 32,
+                "temperature": self.temperature,
+                "response_format": schema,
+            }
+            for attempt in range(self.max_retries + 1):
+                try:
+                    resp = await self._client.post(endpoint, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        content = (data.get("choices", [{}])[0]
+                                   .get("message", {}).get("content", ""))
+                        obj = json.loads(content)
+                        pid = obj.get("post_id")
+                        act = str(obj.get("action", "S")).strip().upper()[:1]
+                        if act not in actions:
+                            act = "S"
+                        if valid_ids and pid not in valid_ids:
+                            pid = valid_ids[0] if valid_ids else None
+                        return (user_id, pid, act)
+                    elif resp.status_code == 400:
+                        payload.pop("response_format", None)
+                except Exception as e:  # noqa: BLE001
+                    if attempt == self.max_retries:
+                        logger.debug("classify_feed failed for %s: %s", user_id, e)
+                    await asyncio.sleep(0.1 * (2 ** attempt))
+            return (user_id, None, "S")
+
+        return await asyncio.gather(*[
+            _one(uid, prompt, vids) for uid, prompt, vids in feed_items
+        ])
+
     # Alias matching plan nomenclature
     classify_actions_batch = classify_batch
 

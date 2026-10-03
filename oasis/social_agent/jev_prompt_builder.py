@@ -336,6 +336,41 @@ class JEVPromptBuilder:
         return f"{instruction}{prefix}{suffix}"
 
     @classmethod
+    def build_feed_prompt(
+        cls,
+        agent: "AgentSuffixData",
+        posts: list,
+        allowed_chars: Sequence[str] | None = None,
+    ) -> str:
+        """WHOLE-FEED prompt: one agent sees ALL feed posts and selects one post
+        + one action -- mirroring base OASIS classic (which shows the whole feed
+        and asks the agent to pick). Used by the feed-mode experiment to test
+        whether comparative/feed-level context restores reposting.
+
+        Only the root task stem is run-constant (cacheable); the per-agent feed
+        block is per-agent (feeds differ), so this trades the per-post cache win.
+        """
+        chars = [c for c in (allowed_chars or cls.VALID_ACTIONS)
+                 if c in cls.ACTION_DESCRIPTIONS]
+        if "S" not in chars:
+            chars.append("S")
+        menu = ", ".join(f"{c} ({cls.ACTION_DESCRIPTIONS[c][1]})" for c in chars)
+        persona = cls.build_agent_persona_context(agent)
+        feed_lines = []
+        for p in posts:
+            feed_lines.append(cls.build_post_prefix(p).rstrip())
+        feed_block = "\n".join(feed_lines)
+        return (
+            f"{cls.OASIS_PROMPT_STEM}\n"
+            f"{cls.OASIS_ENV_STEER}\n"
+            f"{persona}\n"
+            f"After refreshing, you see these posts:\n{feed_block}\n\n"
+            f"Pick ONE post and ONE action that best reflects your inclination. "
+            f"Available actions: {menu}.\n"
+            f"Respond with JSON: {{\"post_id\": <id>, \"action\": \"<letter>\"}}."
+        )
+
+    @classmethod
     def parse_action_char(cls, raw_response: str) -> str:
         """Parses and validates a single reaction character ('L', 'R', 'C', 'S') from model output.
 
