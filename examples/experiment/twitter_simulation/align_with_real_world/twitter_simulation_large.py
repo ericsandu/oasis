@@ -126,11 +126,29 @@ async def running(
         model_urls = [_env_url]
     else:
         model_urls = create_model_urls(inference_configs["server_url"])
+    # --- Classic baseline tool-calling fix ---------------------------------
+    # Plain Meta-Llama-3-8B-Instruct narrates action intent in prose and emits
+    # EMPTY tool_calls under vLLM's auto parser (its tokenizer lacks the
+    # <|python_tag|> token the llama3_json parser needs). Forcing
+    # tool_choice="required" makes vLLM use STRUCTURED/GUIDED decoding to emit a
+    # schema-valid tool call every turn (supported since vLLM>=0.8.3; needs NO
+    # --tool-call-parser), capturing the intent base OASIS otherwise drops.
+    # Applied to the CLASSIC path ONLY: JEV bypasses tool-calling entirely via
+    # its own logit-bias classifier, so this must not touch the JEV run.
+    # Override/disable with OASIS_CLASSIC_TOOL_CHOICE (e.g. "auto"/"none"/"").
+    _classic_tool_choice = os.environ.get("OASIS_CLASSIC_TOOL_CHOICE", "required")
+    _classic_is_jev = jev_enabled((inference_configs or {}).get("use_jev"))
+    _agent_model_config: dict[str, Any] = {}
+    if (not _classic_is_jev) and _classic_tool_choice:
+        _agent_model_config["tool_choice"] = _classic_tool_choice
+        social_log.info("CLASSIC agent model: tool_choice=%r (forced structured "
+                        "tool emission)", _classic_tool_choice)
     models = [
         ModelFactory.create(
             model_platform=ModelPlatformType.VLLM,
             model_type=inference_configs["model_type"],
             url=url,
+            model_config_dict=_agent_model_config or None,
         ) for url in model_urls
     ]
     try:
