@@ -84,6 +84,12 @@ class AgentSuffixData:
     stance_score: float
     recent_actions: str = ""
     topic: str | None = None
+    # Audience context (matches classic OASIS env: "I have N followers. I have
+    # N follows."). This broadcaster framing is what motivates reposting; its
+    # absence was why JEV agents reacted as readers (Like) not broadcasters
+    # (Repost). -1 => unknown/not provided (line omitted).
+    num_followers: int = -1
+    num_follows: int = -1
 
 
 class JEVPromptBuilder:
@@ -247,6 +253,16 @@ class JEVPromptBuilder:
             f"[OBSERVER]: @{user_clean} | Traits: {mbti_clean}, {country_clean} | Bio: {bio_clean}",
             f"[STANCE]: {topic_prefix}{agent.stance_label.strip()} ({agent.stance_score:+.2f})",
         ]
+
+        # Audience context, matching base-OASIS env ("I have N followers. I have
+        # N follows."). This broadcaster framing motivates reposting; omit when
+        # unknown (-1).
+        if agent.num_followers >= 0 or agent.num_follows >= 0:
+            nf = agent.num_followers if agent.num_followers >= 0 else 0
+            ng = agent.num_follows if agent.num_follows >= 0 else 0
+            lines.append(
+                f"[AUDIENCE]: I have {nf} followers. I have {ng} follows."
+            )
 
         if agent.recent_actions and agent.recent_actions.strip():
             recent_clean = agent.recent_actions.strip()

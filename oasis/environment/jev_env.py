@@ -279,6 +279,7 @@ def _create_agent_suffix(
     agent: Any,
     belief_state: BeliefState,
     topic: str,
+    follower_map: dict | None = None,
 ) -> AgentSuffixData:
     """Construct AgentSuffixData from agent profile and dynamic belief state."""
     user_id = _get_agent_id(agent)
@@ -319,6 +320,12 @@ def _create_agent_suffix(
     stance_label = belief_state.get_stance_label(topic)
     recent_actions = belief_state.get_episodic_summary()
 
+    nf, ng = -1, -1
+    if follower_map:
+        pair = follower_map.get(user_id)
+        if pair is not None:
+            nf, ng = pair
+
     return AgentSuffixData(
         user_id=user_id,
         user_name=user_name,
@@ -329,6 +336,8 @@ def _create_agent_suffix(
         stance_score=stance_score,
         recent_actions=recent_actions,
         topic=topic,
+        num_followers=nf,
+        num_follows=ng,
     )
 
 
@@ -745,6 +754,35 @@ class JEVEnvironment(OasisEnv):
         """Assign or override BeliefState for a user."""
         self.belief_states[user_id] = state
 
+    def _fetch_follower_map(self) -> dict:
+        """Batch-read {user_id: (num_followers, num_followings)} from the user
+        table in ONE query per step, for the agent-suffix audience context.
+
+        Keyed by both user_id and agent_id so callers can look up by either.
+        Returns an empty dict on any failure (suffix then omits the AUDIENCE
+        line, degrading to the prior behaviour rather than erroring).
+        """
+        cur = getattr(self.platform, "db_cursor", None)
+        if cur is None:
+            return {}
+        out: dict = {}
+        try:
+            cur.execute(
+                "SELECT user_id, agent_id, num_followers, num_followings "
+                "FROM user"
+            )
+            for row in cur.fetchall():
+                uid, aid, nf, ng = row[0], row[1], row[2], row[3]
+                pair = (int(nf or 0), int(ng or 0))
+                if uid is not None:
+                    out[int(uid)] = pair
+                if aid is not None:
+                    out[int(aid)] = pair
+        except Exception as e:  # noqa: BLE001
+            logger.debug("follower-map fetch failed: %s", e)
+            return {}
+        return out
+
     def _enrich_posts_with_stance(self, posts: list[Any]) -> list[Any]:
         """Enriches raw post dictionaries from feed with their real database stance if missing."""
         if not posts or self.platform is None or getattr(self.platform, "db_cursor", None) is None:
@@ -927,6 +965,12 @@ class JEVEnvironment(OasisEnv):
             tuple[int, int], tuple[PostPrefixData, AgentSuffixData, Any, float]
         ] = {}
 
+        # Batch-fetch audience context (num_followers / num_followings) ONCE per
+        # step from the user table, so every agent suffix can carry the same
+        # broadcaster framing classic OASIS shows ("I have N followers.") without
+        # a per-agent DB query. Maintained by platform follow/unfollow.
+        follower_map = self._fetch_follower_map()
+
         for agent, feed in zip(agents, feeds):
             user_id = _get_agent_id(agent)
             belief_state = self.get_belief_state(user_id)
@@ -937,7 +981,8 @@ class JEVEnvironment(OasisEnv):
                     raw_post, prefix_cache, self.config.default_topic
                 )
                 agent_suffix = _create_agent_suffix(
-                    agent, belief_state, post_prefix.topic
+                    agent, belief_state, post_prefix.topic,
+                    follower_map=follower_map
                 )
                 full_prompt = JEVPromptBuilder.assemble_eval_prompt(
                     post_prefix, agent_suffix,
