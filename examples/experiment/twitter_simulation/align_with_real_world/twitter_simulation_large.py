@@ -227,11 +227,22 @@ async def running(
         jev_model = os.environ.get("JEV_VLLM_MODEL") or (
             inference_configs or {}).get("model_type", "")
         os.environ.setdefault("OPENAI_API_KEY", "EMPTY")
-        social_log.info("JEV ENABLED: actions=%s url=%s", allowed_chars, jev_url)
+        # Match base-OASIS classic sampling: classic agents go through CAMEL's
+        # VLLMConfig, whose temperature defaults to None -> vLLM server default
+        # 1.0 (full sampling). JEV's classifier defaulted to temperature=0.0
+        # (GREEDY argmax), which deterministically picks the single top action
+        # (always Like for an isolated post) and NEVER samples the lower-but-
+        # real-probability Repost -- the true cause of JEV's 0-repost collapse,
+        # not the prompt. Match classic by sampling at 1.0. Override via
+        # OASIS_JEV_CLASSIFY_TEMP.
+        _jev_temp = float(os.environ.get("OASIS_JEV_CLASSIFY_TEMP", "1.0"))
+        social_log.info("JEV ENABLED: actions=%s url=%s classify_temp=%.2f",
+                        allowed_chars, jev_url, _jev_temp)
         _jev_cfg = JEVExecutionConfig(
             classifier_client=VLLMJEVClassifierClient(
                 base_url=jev_url, model_name=jev_model,
-                logit_bias=logit_bias, token_id_map=token_id_map),
+                logit_bias=logit_bias, token_id_map=token_id_map,
+                temperature=_jev_temp),
             max_actions_per_agent=1,
             enable_belief_updates=False,
             # Enabled action letters (from the config's available_actions) so the
