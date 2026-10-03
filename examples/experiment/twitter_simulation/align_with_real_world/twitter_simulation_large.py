@@ -277,6 +277,11 @@ async def running(
             # masking a letter -- the faithful analogue of classic's tool-call
             # generation. Mutually exclusive with feed_mode.
             generative_mode=(os.environ.get("OASIS_JEV_GENERATIVE", "0") == "1"),
+            # ANYJEV L0 debias (OASIS_JEV_L0=1): cancel the content-free per-letter
+            # bias (permutation-only / prior='none') after classification. Pairs
+            # with guided_choice. OASIS_JEV_L0_GROUP=1 => per-user mean.
+            l0_debias=(os.environ.get("OASIS_JEV_L0", "0") == "1"),
+            l0_group_by_user=(os.environ.get("OASIS_JEV_L0_GROUP", "0") == "1"),
             # Where to dump the per-post P(R) vs P(L) confidence-gap CSV. Set via
             # OASIS_JEV_CONF_DUMP; empty => no dump.
             confidence_dump_path=(os.environ.get("OASIS_JEV_CONF_DUMP") or None),

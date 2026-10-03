@@ -591,6 +591,92 @@ def dump_action_confidence_gap(
     return rows
 
 
+def apply_l0_debias(
+    results: list[ClassificationResult],
+    skip_char: str = "S",
+    group_by_user: bool = False,
+) -> list[ClassificationResult]:
+    """AnyJev L0 permutation-debias (prior='none' variant), implemented as
+    per-label-token mean subtraction over the batch.
+
+    THE MECHANISM. Our single-token classifier reads logprobs for the action
+    LETTERS (L/R/F/S) after a fixed prompt. The model carries a content-free
+    per-letter prior -- an additive offset on each letter's logprob that has
+    nothing to do with the post (it's why reversing option order flips the
+    answer, and why our raw readout collapsed to Like, then to Follow under a
+    reframe). AnyJev's L0 cancels exactly this by cycling each option through
+    every label position and averaging; the AnyJev L0 study proves that a full
+    cycle is IDENTICAL to subtracting the per-label 'position profile' (the part
+    of the batch mean content cannot explain). So we compute, across the batch,
+    each action-letter's MEAN logprob and subtract it from every item -- removing
+    the content-free letter bias in ONE pass, no K rotations, no extra prefills.
+
+    We deliberately use the position-profile form (= permutation-only, prior=
+    'none'), NOT the gold-label batch prior: our action marginal is strongly
+    skewed (repost-dominant on this experiment) and the AnyJev study shows the
+    batch prior HURTS skewed marginals. This is the safe half of L0.
+
+    After debiasing each item's logits, we re-softmax and re-pick the argmax
+    non-skip-aware action. logits are REPLACED with the debiased values so the
+    confidence dump and downstream budget see the corrected distribution.
+
+    Args:
+        results: raw ClassificationResult list (logits populated per letter).
+        skip_char: no-op action char (kept, not boosted away).
+        group_by_user: if True, compute the per-letter mean within each user's
+            own items instead of across the whole batch. Default False (global
+            batch mean), matching AnyJev's batch-level profile.
+
+    Returns:
+        New list, same order, with debiased action_char/confidence/logits.
+    """
+    if not results:
+        return []
+
+    def _mean_profile(items: list[ClassificationResult]) -> dict[str, float]:
+        sums: dict[str, float] = defaultdict(float)
+        counts: dict[str, int] = defaultdict(int)
+        for r in items:
+            for ch, lp in (r.logits or {}).items():
+                sums[ch] += lp
+                counts[ch] += 1
+        return {ch: sums[ch] / counts[ch] for ch in sums if counts[ch] > 0}
+
+    if group_by_user:
+        groups: dict[int, list[ClassificationResult]] = defaultdict(list)
+        for r in results:
+            groups[r.user_id].append(r)
+        profiles = {uid: _mean_profile(items) for uid, items in groups.items()}
+    else:
+        global_profile = _mean_profile(results)
+
+    out: list[ClassificationResult] = []
+    for r in results:
+        profile = profiles[r.user_id] if group_by_user else global_profile
+        debiased = {
+            ch: lp - profile.get(ch, 0.0) for ch, lp in (r.logits or {}).items()
+        }
+        if not debiased:
+            out.append(r)
+            continue
+        probs = compute_softmax(debiased)
+        # pick the highest-probability action (skip included -- a genuine no-op
+        # must still be able to win; budget resolution handles the rest).
+        best = max(probs.items(), key=lambda kv: kv[1])[0]
+        out.append(
+            ClassificationResult(
+                user_id=r.user_id,
+                post_id=r.post_id,
+                action_char=best,
+                confidence=probs.get(best, 0.0),
+                logits=debiased,
+                comment_text=r.comment_text,
+                quote_text=r.quote_text,
+            )
+        )
+    return out
+
+
 class MockJEVClassifierClient:
     """Deterministic, hermetic JEV classifier client for unit tests without GPU or network.
 

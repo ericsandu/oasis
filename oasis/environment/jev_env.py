@@ -70,6 +70,7 @@ from oasis.inference.jev_classifier import (
     resolve_intra_feed_budget,
     resolve_competitive_full_logits,
     dump_action_confidence_gap,
+    apply_l0_debias,
 )
 from oasis.social_agent.agent import SocialAgent
 from oasis.social_agent.agent_graph import AgentGraph
@@ -152,6 +153,16 @@ class JEVExecutionConfig:
     # axis that restores reposting. Mutually exclusive with feed_mode. Default
     # False.
     generative_mode: bool = False
+    # ANYJEV L0 debias (prior='none' / permutation-only): after per-post
+    # classification, subtract each action-letter's batch-mean logprob (the
+    # content-free label prior) and re-pick -- the training-free AnyJev L0 fix
+    # for the single-token letter-bias that made the raw readout flip (Like <->
+    # Follow) under reframing. Applied to raw_results before budget resolution.
+    # Pairs naturally with guided_choice (correct per-letter logits). Default off.
+    l0_debias: bool = False
+    # When True, compute the L0 per-letter mean within each user's own feed
+    # items instead of across the whole batch. Default False (global batch mean).
+    l0_group_by_user: bool = False
     # Path to write the per-post P(R) vs P(L) confidence-gap CSV when
     # competitive_mode (or confidence_dump) is on. None => no dump.
     confidence_dump_path: str | None = None
@@ -1152,6 +1163,17 @@ class JEVEnvironment(OasisEnv):
         else:
             raw_results = await self.classifier_client.classify_batch(
                 eval_items, generate_comments=False
+            )
+
+        # AnyJev L0 debias (permutation-only / prior='none'): cancel the
+        # content-free per-letter bias before any dump/selection, so the
+        # confidence dump and budget see the CORRECTED distribution. Skipped in
+        # feed_mode (feed results carry no per-letter logits) and generative_mode
+        # (generation has no single-letter logit distribution to debias).
+        if (self.config.l0_debias and not self.config.feed_mode
+                and not self.config.generative_mode):
+            raw_results = apply_l0_debias(
+                raw_results, group_by_user=self.config.l0_group_by_user
             )
 
         # Stage e: Resolve intra-feed budget constraints.
