@@ -94,6 +94,8 @@ OASIS_JEV_COMPETITIVE=1     # scarcity framing + cross-feed full-logits selectio
 OASIS_JEV_GUIDED_CHOICE=1   # vLLM structured_outputs CHOICE masking (not logit-bias)
 OASIS_JEV_GENERATIVE=1      # native generation of {"action":"..."} per post
 OASIS_JEV_INSTRUCT_FRAME=1  # wrap raw completion prompt in Llama-3 instruct template
+OASIS_JEV_L0=1              # AnyJev L0 debias (per-letter batch-mean, prior='none') — VALIDATED
+OASIS_JEV_L0_GROUP=1        # L0 mean per-user instead of whole-batch
 OASIS_JEV_CONF_DUMP=<path>  # per-post P(like)/P(repost) CSV dump
 OASIS_JEV_CLASSIFY_TEMP=1.0 # classifier sampling temperature (default now 1.0)
 OASIS_CLASSIC_TOOL_CHOICE=auto  # classic leg tool_choice (auto = paper-faithful)
@@ -157,8 +159,19 @@ Each row is a controlled run; "repost" is on `False_Business_0`, classic ≈ 107
 | guided-choice | vLLM `structured_outputs:{choice}` masking (correct tokens, no bias) | **16** | 17 | 0.73 | token-map fix helped 4→16, not enough |
 | **generative** | **native `{"action":"repost"}` generation per post** | **105** | **104** | **0.08** | **near-parity; matches real data** |
 | instruct-frame | guided-choice + Llama-3 chat template on completions | 11 | 12 | 0.67 | flipped collapse Like→**Follow 254** |
+| **guided-choice + AnyJev L0** | per-letter batch-mean debias (prior='none') | **86** | **87** | **0.242** | **de-collapses; NRMSE-vs-real 0.325 ≈ paper's ~0.30; speedup held 1.95×** |
 
-### 3.1 What each result PROVES (the logic chain)
+L0 result detail (commit `7f7673c`, job 267874): action mix repost 86 / like 79 /
+follow 69 / do_nothing 0 — a realistic three-way SPREAD instead of a single-action
+collapse. **This is the validated fast-path engine.** NRMSE 0.73→0.24 vs classic,
+0.325 vs real (paper-level), at 1.95× speedup. KNOWN SIDE EFFECT: L0 **over-flattens**
+a genuinely skewed marginal — classic's "repost-dominant, little else" became an even
+split, so repost dropped 107→86 and like/follow/do_nothing shifted up (do_nothing
+0 → nearly every agent now acts every step; follow(table) 94→154 = 69 sim-created
+follows vs classic's 9, on the SAME 85 pre-seeded edges). The AnyJev study's fix is
+`prior_strength=0.75` (subtract 0.75× the profile, not 1.0×) to keep repost's
+legitimate majority — a one-line knob we have not yet added. Generative remains the
+max-fidelity mode (0.08); L0 is the max-*speed-with-acceptable-fidelity* mode.
 1. **Not decode temperature.** Temp 1.0 only moved reposts 0→4.
 2. **Not audience/broadcaster context.** Adding it dropped reposts and spiked Follow.
 3. **Not feed size / selection.** k=1 classic (one isolated post) reposts 109 —
@@ -223,9 +236,114 @@ brittleness, not necessarily emergent fidelity.
 
 ---
 
+## 4b. TRANSITION PLAN — move the engine onto AnyJev as the decision layer
+
+> **Intent.** Stop maintaining our own hand-rolled single-token decision mechanism
+> (`DEFAULT_ACTION_TOKEN_MAP` logit-bias + ad-hoc parse) and adopt **AnyJev** as the
+> decision layer wherever possible. AnyJev is the correct, library-maintained,
+> training-free version of exactly what our classifier approximates. Our engine
+> (`step_jev`, scheduler, belief, prompt-cache architecture, harness) stays; only the
+> **classifier backend** is swapped. The goal is: our JEV = `<our engine>` + `<AnyJev
+> as the Decider>`, with generation kept as the separate max-fidelity mode.
+
+### Why transition (the case)
+- Our raw logit readout IS AnyJev's `raw` level (23% flip rate, the brittleness we
+  hit). Our inline `apply_l0_debias` (commit `7f7673c`) is a hand-reimplementation of
+  AnyJev's `perm`/L0 that already works (repost 16→86, NRMSE 0.73→0.24) — i.e. we have
+  independently rebuilt a slice of AnyJev. Adopting the library gives us the rest for
+  free: calibrated L1 (temperature scaling), L2 (closed-form head), the adaptive
+  rotation budget (certified 1% disagreement at ~2.2× fewer prefills), and a
+  maintained API matching TypeSafe's System One.
+- It is Apache-2.0, `pip install anyjev`, supports vLLM (which we already serve), and
+  needs **no fine-tuning** for L0/L1.
+
+### What AnyJev replaces vs what stays (scope — keep this honest)
+REPLACES (≈150 lines in `oasis/inference/jev_classifier.py`):
+- `DEFAULT_ACTION_TOKEN_MAP`, `_format_logit_bias_payload`, `_ensure_token_bias`,
+  `auto_discover_token_ids` — the hand-picked token-id machinery.
+- the single-token readout + top-5 parse in `classify_batch`.
+- our inline `apply_l0_debias` (superseded by AnyJev's own L0, keep ours as fallback).
+STAYS (the ~98% that is the actual engine):
+- `jev_env.py` `step_jev()`, `micro_time_scheduler.py`, `belief_state.py`,
+  `jev_prompt_builder.py` (the KV-cache prompt architecture), all configs/harness,
+  the classic-leg fixes, generative mode.
+
+### Target architecture
+Introduce an `AnyJevClassifierClient` that satisfies the SAME interface our engine
+already calls (`classify_batch(items) -> list[ClassificationResult]`), so `step_jev`
+is UNCHANGED. Internally it maps each `EvalItem` to an AnyJev call:
+```python
+from anyjev import Decider, Question
+from anyjev.backends.vllm import VLLMBackend
+
+# one Decider per run, pointed at the vLLM we already start in the sbatch
+d = Decider(VLLMBackend(jev_url, model_name), level="L0", prior="none")
+#   prior="none" is REQUIRED for us: our action marginal is repost-skewed and the
+#   AnyJev batch prior HURTS skewed marginals (see §4). L0 = perm-only debias.
+q = Question.choice(
+        "Which single action does this agent take on the post?",
+        options=[ACTION_DESCRIPTIONS[c][0] for c in allowed_chars],  # tool names
+        name="action")
+# state = our existing assembled per-post prompt (persona+post), as the AnyJev "state"
+dist = d.decide(state, [q])["action"].distribution   # {tool_name: prob}
+# map tool_name -> action_char, fill ClassificationResult(logits=dist, ...)
+```
+Key mapping notes:
+- `ACTION_DESCRIPTIONS` (in `jev_prompt_builder.py`) is already the single source of
+  truth char↔tool-name↔description — reuse it so options stay config-derived.
+- Preserve the `logits`/`confidence` fields on `ClassificationResult` from AnyJev's
+  returned `distribution` so the confidence dump + budget resolution are unchanged.
+- Our prompt-cache layering (task/post/agent) still applies — AnyJev's `state` is just
+  our assembled prompt; keep it byte-stable for RadixAttention reuse.
+
+### Deployment reality (the friction, documented)
+- `anyjev` is **NOT in the SIF** (verified: `ModuleNotFoundError`), and the SIF
+  filesystem is **read-only at runtime**. Adopting the library therefore needs a
+  **SIF rebuild**: add `anyjev` (and `anyjev[hf]` if using L2) to `jev_oasis.def`,
+  rebuild via `srun --partition=haswell ... apptainer build --force` (~8–10 min).
+  Audit dep compatibility with the pinned vllm 0.23 / torch first (the full oasis
+  import set is 11 third-party pkgs; add anyjev's without breaking the vllm pin).
+- L0/L1 run against our existing `--task generate` vLLM server. **L2** (closed-form
+  head, +6–8 acc points) needs an **embed-pooler** server
+  (`vllm serve ... --task embed --override-pooler-config ...`) and 100–300 labels per
+  question — a bigger change; defer unless L0/L1 prove insufficient.
+
+### Phased plan
+1. **Phase 0 (no rebuild, DONE):** inline `apply_l0_debias` proves L0 helps on our
+   task (repost 16→86). This de-risks the whole transition — we KNOW the paradigm works
+   here before paying the rebuild cost.
+2. **Phase 1 — strength knob (no rebuild, 1 line):** add `prior_strength` (0.5/0.75/1.0)
+   to our inline `apply_l0_debias` and sweep it to fix the over-flatten (repost should
+   climb back toward classic's 107 at ~0.75). This also tells us the *target* behavior
+   before swapping to the library.
+3. **Phase 2 — adopt the library:** add `anyjev` to the `.def`, rebuild SIF, implement
+   `AnyJevClassifierClient` (above), gate behind `OASIS_JEV_ANYJEV=1`. A/B it against
+   our inline L0 on the same topic/seed — they should match within noise (both are
+   perm-only L0); if they diverge, our inline version has a bug the library exposes.
+4. **Phase 3 — calibration (optional):** if thresholded confidence matters (e.g. for a
+   decision rule), add AnyJev **L1** (temperature scaling, 100–500 labels bootstrapped
+   from classic/generation runs as ground truth). ECE 0.24→0.095.
+5. **Phase 4 — retire the hand-rolled path:** once `AnyJevClassifierClient` matches or
+   beats our inline L0 across seeds, delete `DEFAULT_ACTION_TOKEN_MAP` + token-bias
+   machinery (keep guided-choice as the masking primitive AnyJev can also use).
+
+### The caveat that bounds this transition (do not forget)
+AnyJev makes the *classifier* calibrated and stable; it does **not** make
+classification equal to generation. Our own ablation (k=1 classic + generative run)
+shows generation reaches NRMSE 0.08 while even debiased classification sits at ~0.24.
+So the transition's ceiling for *cascade fidelity* is "good, fast, paper-level"
+(≈0.3 vs real), NOT "parity with generation." Position AnyJev-L0 as the **fast engine**
+and generation as the **faithful engine**; the transition is about making the fast
+engine correct and maintainable, not about beating generation.
+
+---
+
 ## 5. Current branch state (commits this session)
 
 ```
+<newer: this handoff update + AnyJev transition plan>
+7f7673c feat(jev): AnyJev L0 debias backend (training-free, drop-in)  <-- VALIDATED
+07ca0e3 docs(jev): comprehensive handoff — findings, ablation ladder, next steps
 5b1ee97 feat(jev): instruct-frame option for single-token classification
 655a15c feat(jev): native-generation per-post mode (compose action, like classic)
 d2c90fa fix(jev): run confidence dump in any per-post mode, not only competitive
@@ -263,35 +381,37 @@ except feed_mode (which supersedes the per-post branches).
 
 ## 6. Where to go next (prioritized, with rationale)
 
-### P0 — Decide the engine's identity (human/research call, not code)
-The core result is settled and defensible: **single-token classification is a
-speed-optimized approximation that does not reproduce cascades; native generation
-reaches parity at ~1.1× speed.** Decide which the engine *is*:
-- **(a) Faithful engine = generation.** Position single-token JEV honestly as a
-  fast approximation valid only for coarse signals. Benchmark generative mode 5×
-  for mean NRMSE + speedup (`run_bench5.sbatch` exists; point it at generative).
-- **(b) Fast engine, made trustworthy.** Add **AnyJev perm-L0** (training-free,
-  `prior="none"` given our skewed marginal) to stabilize the single-token path.
-  Expectation from the L0 study: fixes the flip brittleness (23%→~7%, ours worse),
-  **but may not close the cascade gap** — calibration ≠ generative behavior.
+> **Primary direction (decided this session): transition the decision layer onto
+> AnyJev — see §4b for the full phased plan.** Phase 0 (inline L0) is DONE and
+> VALIDATED (repost 16→86, NRMSE 0.73→0.24, 0.325 vs real ≈ paper, 1.95× speed).
+> The steps below are ordered to execute that transition.
 
-### P1 — Cheap diagnostics to run FIRST (one job each)
-1. **Measure `order_flip_raw`.** Reverse the action list (S/F/R/L) and re-run
-   guided-choice; compare action distributions. The AnyJev study says this
-   zero-label number predicts perm-L0 gain (ρ≈0.6). If our flip rate is as high as
-   the Like→Follow collapse implies, perm-L0 is worth building; if low, the gap is
-   purely classification-vs-generation and L0 won't help.
-2. **Fix `dump_action_confidence_gap` to log all 4 actions** (p_like, p_repost,
-   p_follow, p_skip) and re-run — gets the honest per-post distribution the
-   instruct-frame caveat (§3.2) showed we're currently missing.
+### P0 — Fix L0 over-flatten with a strength knob (Phase 1; no rebuild, ~1 line)
+L0 at full strength over-flattened our skewed marginal (repost 107→86, like/follow
+inflated, do_nothing→0, follow(table) 94→154). Add `prior_strength` (scale the
+subtracted per-letter profile by 0.5/0.75/1.0) to `apply_l0_debias` and sweep it.
+The AnyJev study's default is **0.75** precisely to preserve a legitimate majority on
+skewed marginals — expect repost to climb back toward classic's ~107 at 0.75. Match
+classic's *action MIX*, not just cascade scale. This also fixes the issue a reader
+asked about (the "near-doubling": over-flatten converted do-nothing/default turns
+into active like/follow actions).
 
-### P2 — If pursuing the fast engine
-- `pip install anyjev` requires adding it to `jev_oasis.def` + SIF rebuild (it's a
-  new dep; runtime fs is read-only). OR reimplement perm-only L0 inline (it's just
-  K cyclic-rotation prefills + averaging — cheap, no new dep). Prefer the inline
-  reimplementation to avoid a rebuild; it's ~40 lines over the existing
-  `classify_batch`. Use `prior="none"` (our marginal is repost-skewed; the batch
-  prior would HURT — see §4).
+### P1 — Adopt the AnyJev library as the backend (Phase 2; needs SIF rebuild)
+Implement `AnyJevClassifierClient` behind the existing `classify_batch` interface
+(code sketch in §4b), gated by `OASIS_JEV_ANYJEV=1`. Add `anyjev` to `jev_oasis.def`,
+rebuild the SIF (audit vllm-0.23/torch dep compatibility first). A/B against our
+inline L0 — they should match within noise (both perm-only L0). Use `prior="none"`.
+
+### P1b — Cheap diagnostics worth having (one job each)
+1. **Fix `dump_action_confidence_gap` to log all 4 actions** (currently only
+   p_like/p_repost — the instruct-frame caveat §3.2 showed this hid P(F) dominance).
+2. **Measure `order_flip_raw`** (reverse the action list, re-run) — the zero-label
+   predictor of perm gain; documents how brittle raw was vs L0-fixed.
+
+### P2 — Calibration + retire hand-rolled path (Phases 3–4)
+If thresholded confidence matters, add AnyJev **L1** (temperature scaling, labels
+bootstrapped from classic/generation runs). Once `AnyJevClassifierClient` matches/beats
+inline L0 across seeds, delete `DEFAULT_ACTION_TOKEN_MAP` + token-bias machinery.
 
 ### P3 — The depth gap (orthogonal, still open)
 Even at scale/breadth parity, BOTH engines produce **depth-1 flat-star** cascades
@@ -300,14 +420,17 @@ hardcodes a tiny recsys cache so reposts rarely get re-recommended → no multi-
 chains. This is a recsys-fidelity issue (config: `max_rec_post_len`/
 `refresh_rec_post_count`), independent of the action mechanism. `jev_align.yaml`
 already bumps these to 10; depth is still 1 — needs its own investigation (reposts
-must enter feeds for A→B→C chains to form).
+must enter feeds for A→B→C chains to form). AnyJev does NOT touch this.
 
 ### P4 — Benchmark & write-up
-- 5× benchmark of the chosen engine (`run_bench5.sbatch`) for mean±std NRMSE/speedup.
-- The ablation ladder (§3) is a genuine, publishable finding on its own:
-  *"single-token action classification under logit bias does not reproduce
-  LLM-agent social cascades; the action must be generated"* — with the k=1 control
-  and the generation-vs-classification ablation as the evidence.
+- 5× benchmark of each engine mode (`run_bench5.sbatch`) for mean±std NRMSE/speedup:
+  classic / generative / guided-choice+L0(0.75) / guided-choice+AnyJev-lib.
+- Two genuine, separable findings worth writing up:
+  1. *"single-token action classification under raw logit-bias does not reproduce
+     LLM-agent social cascades; the action must be generated OR the classifier must
+     be debiased"* — k=1 control + generation ablation as evidence.
+  2. *"a training-free AnyJev-L0 debias recovers paper-level cascade fidelity at
+     ~2× throughput, trading a controlled over-flatten tuned by prior_strength."*
 
 ---
 
