@@ -28,6 +28,7 @@ import math
 import os
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -871,6 +872,7 @@ class VLLMJEVClassifierClient:
         post_max_tokens: int | None = 512,
         max_concurrent_comments: int = 8,
         auto_discover_token_ids: bool = False,
+        guided_choice_actions: Sequence[str] | None = None,
     ) -> None:
         """Initializes the vLLM classifier client.
 
@@ -910,6 +912,15 @@ class VLLMJEVClassifierClient:
         )
         self._comment_semaphore = asyncio.Semaphore(max_concurrent_comments)
         self.auto_discover_token_ids = auto_discover_token_ids
+        # When set, classify_batch uses vLLM structured-outputs CHOICE masking
+        # (structured_outputs={"choice":[...]}) instead of logit_bias+argmax.
+        # The server masks to exactly these letters over the REAL tokenizer, so
+        # the model's own (temperature-sampled) preference among the actions
+        # decides -- the faithful analogue of classic's tool-call generation,
+        # with no hand-picked token ids. None => legacy logit-bias path.
+        self.guided_choice_actions = (
+            list(guided_choice_actions) if guided_choice_actions else None
+        )
         self._token_bias_initialized = False
 
         self._own_client = client is None
@@ -1060,9 +1071,19 @@ class VLLMJEVClassifierClient:
         if self.stop and self.classify_max_tokens > 1:
             payload["stop"] = self.stop
 
-        formatted_bias = self._format_logit_bias_payload()
-        if formatted_bias:
-            payload["logit_bias"] = formatted_bias
+        if self.guided_choice_actions:
+            # vLLM structured-outputs CHOICE masking: the server restricts the
+            # output to exactly these strings over the real tokenizer, so the
+            # model's own (temperature-sampled) preference among the actions
+            # decides. No logit_bias / hand-picked token ids. logprobs:5 is kept
+            # so the per-post P(action) confidence dump still works.
+            payload["structured_outputs"] = {
+                "choice": list(self.guided_choice_actions)
+            }
+        else:
+            formatted_bias = self._format_logit_bias_payload()
+            if formatted_bias:
+                payload["logit_bias"] = formatted_bias
 
         # Attempt batched completions endpoint
         response_data: dict[str, Any] | None = None

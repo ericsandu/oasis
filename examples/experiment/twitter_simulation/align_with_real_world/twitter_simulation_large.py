@@ -236,12 +236,23 @@ async def running(
         # not the prompt. Match classic by sampling at 1.0. Override via
         # OASIS_JEV_CLASSIFY_TEMP.
         _jev_temp = float(os.environ.get("OASIS_JEV_CLASSIFY_TEMP", "1.0"))
-        social_log.info("JEV ENABLED: actions=%s url=%s classify_temp=%.2f",
-                        allowed_chars, jev_url, _jev_temp)
+        # GUIDED-CHOICE (OASIS_JEV_GUIDED_CHOICE=1): replace the logit-bias+argmax
+        # classifier with vLLM structured-outputs CHOICE masking over the enabled
+        # action letters. The server masks to exactly {allowed_chars} over the
+        # real tokenizer and the model's temperature-sampled preference decides --
+        # the faithful analogue of classic's tool-call generation, with no
+        # hand-picked / colliding token ids. When on, logit_bias/token_id_map are
+        # NOT passed (the choice grammar supersedes them).
+        _use_guided = os.environ.get("OASIS_JEV_GUIDED_CHOICE", "0") == "1"
+        social_log.info(
+            "JEV ENABLED: actions=%s url=%s classify_temp=%.2f guided_choice=%s",
+            allowed_chars, jev_url, _jev_temp, _use_guided)
         _jev_cfg = JEVExecutionConfig(
             classifier_client=VLLMJEVClassifierClient(
                 base_url=jev_url, model_name=jev_model,
-                logit_bias=logit_bias, token_id_map=token_id_map,
+                logit_bias=(None if _use_guided else logit_bias),
+                token_id_map=(None if _use_guided else token_id_map),
+                guided_choice_actions=(allowed_chars if _use_guided else None),
                 temperature=_jev_temp),
             max_actions_per_agent=1,
             enable_belief_updates=False,
