@@ -129,6 +129,10 @@ class JEVExecutionConfig:
     # (agent,post). Sacrifices per-post KV-cache sharing; tests whether
     # feed-level comparative context restores reposting. Default False (per-post).
     feed_mode: bool = False
+    # When True, use the EXACT upstream OASIS prompt (system + user + env JSON)
+    # via build_verbatim_prompt, for both per-post and feed mode. Default False
+    # (the compact inverted-cache prompt).
+    verbatim_prompt: bool = False
     default_topic: str = "general"
     seed: int | None = None
     downgrade_to_skip: bool = True
@@ -989,10 +993,17 @@ class JEVEnvironment(OasisEnv):
                     agent, belief_state, post_prefix.topic,
                     follower_map=follower_map
                 )
-                full_prompt = JEVPromptBuilder.assemble_eval_prompt(
-                    post_prefix, agent_suffix,
-                    allowed_chars=self.config.allowed_actions,
-                )
+                if self.config.verbatim_prompt:
+                    full_prompt = JEVPromptBuilder.build_verbatim_prompt(
+                        agent_suffix, [post_prefix],
+                        allowed_chars=self.config.allowed_actions,
+                        whole_feed=False,
+                    )
+                else:
+                    full_prompt = JEVPromptBuilder.assemble_eval_prompt(
+                        post_prefix, agent_suffix,
+                        allowed_chars=self.config.allowed_actions,
+                    )
 
                 eval_item = EvalItem(
                     user_id=user_id,
@@ -1034,10 +1045,17 @@ class JEVEnvironment(OasisEnv):
                 suffix_by_agent.setdefault(uid, sfx)
             feed_items = []
             for uid, pps in by_agent.items():
-                prompt = JEVPromptBuilder.build_feed_prompt(
-                    suffix_by_agent[uid], pps,
-                    allowed_chars=self.config.allowed_actions,
-                )
+                if self.config.verbatim_prompt:
+                    prompt = JEVPromptBuilder.build_verbatim_prompt(
+                        suffix_by_agent[uid], pps,
+                        allowed_chars=self.config.allowed_actions,
+                        whole_feed=True,
+                    )
+                else:
+                    prompt = JEVPromptBuilder.build_feed_prompt(
+                        suffix_by_agent[uid], pps,
+                        allowed_chars=self.config.allowed_actions,
+                    )
                 feed_items.append((uid, prompt, [p.post_id for p in pps]))
             feed_choices = await self.classifier_client.classify_feed(
                 feed_items, allowed_chars=self.config.allowed_actions

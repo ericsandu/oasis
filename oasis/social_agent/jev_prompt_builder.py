@@ -371,6 +371,80 @@ class JEVPromptBuilder:
         )
 
     @classmethod
+    def build_verbatim_prompt(
+        cls,
+        agent: "AgentSuffixData",
+        posts: list,
+        allowed_chars: Sequence[str] | None = None,
+        whole_feed: bool = True,
+    ) -> str:
+        """Reproduce the EXACT upstream OASIS agent prompt, byte-for-byte, so JEV
+        sees precisely what a classic agent sees. Three upstream pieces:
+          1. system message  (user.py: to_twitter_system_message)
+          2. user message    (agent.py: perform_action_by_llm)
+          3. env block        (agent_environment.py: env_template), with the feed
+             rendered as json.dumps(posts, indent=4) exactly like classic, plus
+             "I have N followers." / "I have N follows."
+        The ONLY non-upstream addition is a trailing output-format line, because
+        classic names actions via TOOL SCHEMAS which JEV (logit-bias / guided
+        JSON) does not have. whole_feed=False renders a single-post feed (per-post
+        mode); True renders all posts (whole-feed mode).
+        """
+        import json as _json
+        chars = [c for c in (allowed_chars or cls.VALID_ACTIONS)
+                 if c in cls.ACTION_DESCRIPTIONS]
+        if "S" not in chars:
+            chars.append("S")
+        # --- 1. system message (verbatim) ---
+        name_string = f"Your name is {agent.user_name}."
+        desc = f"{name_string}\nYour have profile: {agent.bio}."
+        system_content = (
+            "\n# OBJECTIVE\n"
+            "You're a Twitter user, and I'll present you with some tweets. "
+            "After you see the tweets, choose some actions from the following "
+            "functions.\n\n# SELF-DESCRIPTION\n"
+            "Your actions should be consistent with your self-description and "
+            f"personality.\n{desc}\n\n# RESPONSE METHOD\n"
+            "Please perform actions by tool calling.\n        "
+        )
+        # --- 3. env block (verbatim env_template, no groups) ---
+        post_dicts = []
+        for p in posts:
+            post_dicts.append({
+                "post_id": p.post_id,
+                "user_id": getattr(p, "author_name", ""),
+                "content": p.content,
+                "num_likes": p.num_likes,
+                "num_shares": p.num_shares,
+            })
+        posts_json = _json.dumps(post_dicts, indent=4)
+        nf = agent.num_followers if agent.num_followers >= 0 else 0
+        ng = agent.num_follows if agent.num_follows >= 0 else 0
+        env_prompt = (
+            f"I have {nf} followers. I have {ng} follows.\n"
+            f"After refreshing, you see some posts {posts_json}\n"
+            "pick one you want to perform action that best reflects your "
+            "current inclination based on your profile and posts content. "
+            "Do not limit your action in just `like` to like posts"
+        )
+        # --- 2. user message (verbatim) ---
+        user_msg = (
+            "Please perform social media actions after observing the platform "
+            "environments. Notice that don't limit your actions for example to "
+            f"just like the posts. Here is your social media environment: {env_prompt}"
+        )
+        # --- JEV-only output contract (classic uses tool schemas) ---
+        menu = ", ".join(f"{c} ({cls.ACTION_DESCRIPTIONS[c][1]})" for c in chars)
+        if whole_feed:
+            out = (f'\n\nChoose ONE post and ONE action ({menu}). '
+                   'Respond with JSON: {"post_id": <id>, "action": "<letter>"}.')
+        else:
+            letters = "/".join(chars)
+            out = (f"\n\nChoose ONE action ({letters}): {menu}. "
+                   "Output ONLY the letter.\nAction: ")
+        return f"{system_content}\n{user_msg}{out}"
+
+    @classmethod
     def parse_action_char(cls, raw_response: str) -> str:
         """Parses and validates a single reaction character ('L', 'R', 'C', 'S') from model output.
 
