@@ -31,7 +31,15 @@ $RUN python3 -m vllm.entrypoints.openai.api_server --model $MODEL \
   --max-model-len 8192 --gpu-memory-utilization 0.90 --enforce-eager \
   --trust-remote-code \
   --enable-auto-tool-choice --tool-call-parser hermes \
+  --chat-template $ALIGN/tool_chat_template_llama3_min.jinja \
   > vllm_compare.log 2>&1 &
+# --chat-template: plain Meta-Llama-3-8B's built-in template has NO tool block,
+# so passing tools=[...] renders a prompt that never mentions the tools -> the
+# model prose-narrates and emits 0 tool calls under tool_choice=auto. This
+# minimal template adds ONLY a tools block: it serializes CAMEL's tool schemas
+# into a system message and states the exact <tool_call>{...}</tool_call>
+# format the hermes parser extracts. With no tools passed it is byte-identical
+# to the base template, so the JEV leg (completions, no tools) is unaffected.
 # tool-call parsing: vLLM 0.23 rejects tool_choice="required" unless
 # --tool-call-parser is set. llama3_json CRASHES on plain Meta-Llama-3-8B
 # (tokenizer lacks the <|python_tag|> token it needs); hermes is JSON/regex

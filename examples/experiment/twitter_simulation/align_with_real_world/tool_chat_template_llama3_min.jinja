@@ -1,0 +1,19 @@
+{%- set loop_messages = messages -%}
+{%- if tools -%}
+{{- bos_token -}}
+{{- "<|start_header_id|>system<|end_header_id|>\n\n" -}}
+{{- "You have access to the following tools. To use a tool, respond with a single line containing a <tool_call> tag wrapping a JSON object with the tool name and its arguments, exactly like:\n" -}}
+{{- "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg\": value}}</tool_call>\n" -}}
+{{- "Available tools (JSON schema):\n" -}}
+{%- for t in tools -%}
+{{- (t.function if t.function is defined else t) | tojson -}}
+{{- "\n" -}}
+{%- endfor -%}
+{{- "<|eot_id|>" -}}
+{%- endif -%}
+{%- for message in loop_messages -%}
+{%- set content = "<|start_header_id|>" + message["role"] + "<|end_header_id|>\n\n" + message["content"] | trim + "<|eot_id|>" -%}
+{%- if loop.index0 == 0 and not tools -%}{%- set content = bos_token + content -%}{%- endif -%}
+{{- content -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}{{- "<|start_header_id|>assistant<|end_header_id|>\n\n" -}}{%- endif -%}
