@@ -126,6 +126,17 @@ async def running(
         model_urls = [_env_url]
     else:
         model_urls = create_model_urls(inference_configs["server_url"])
+    # The vLLM server is launched with --served-model-name set to the on-disk
+    # path (e.g. /models/Meta-Llama-3-8B-Instruct), so requests MUST use that
+    # exact name or vLLM returns 404 ("model does not exist") and every agent
+    # LLM call silently fails -> agents only ever 'refresh'. Prefer the runtime
+    # JEV_VLLM_MODEL (the sbatch exports the served name) over the YAML's HF
+    # repo name, mirroring the JEV_VLLM_URL preference just above.
+    _env_model = os.environ.get("JEV_VLLM_MODEL")
+    _agent_model_type = _env_model or inference_configs["model_type"]
+    if _env_model:
+        social_log.info("CLASSIC agent model_type <- JEV_VLLM_MODEL=%r "
+                        "(served name; YAML model_type ignored)", _env_model)
     # --- Classic baseline tool-calling fix ---------------------------------
     # Plain Meta-Llama-3-8B-Instruct narrates action intent in prose and emits
     # EMPTY tool_calls under vLLM's auto parser (its tokenizer lacks the
@@ -146,7 +157,7 @@ async def running(
     models = [
         ModelFactory.create(
             model_platform=ModelPlatformType.VLLM,
-            model_type=inference_configs["model_type"],
+            model_type=_agent_model_type,
             url=url,
             model_config_dict=_agent_model_config or None,
         ) for url in model_urls
