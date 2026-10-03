@@ -1,0 +1,33 @@
+---
+# k=1 CLASSIC run of the align_with_real_world experiment (OASIS F.2.2).
+# Identical to classic_align.yaml EXCEPT the feed is forced to a SINGLE post:
+#   refresh_rec_post_count: 1, max_rec_post_len: 1, following_post_count: 0
+# so the classic agent sees exactly ONE post per step (no selection among many).
+#
+# Hypothesis under test: classic reposts heavily because it SELECTS among many
+# posts (the comparative/scarcity effect). If that is the driver, k=1 should
+# collapse classic's reposting toward Like -- converging on JEV per-post
+# behaviour. If classic still reposts at k=1, feed-size selection is NOT the
+# cause. Distinct db_path so it never clobbers the k=10 classic DB.
+data:
+  db_path: data/simu_db/classic_align_k1_False_Business_0.db
+  csv_path: data/twitter_dataset/anonymous_topic_200_1h/False_Business_0.csv
+simulation:
+  num_timesteps: 50          # paper F.2.2
+  clock_factor: 60
+  recsys_type: twhin-bert    # original OASIS recommender (not Gorse)
+  # k=1 feed: ONE post per step, from the recsys only, no follow-path posts.
+  refresh_rec_post_count: 1
+  max_rec_post_len: 1
+  following_post_count: 0
+  use_jev: false              # stock OASIS classic path
+  available_actions:
+    - like_post
+    - repost
+    - follow
+    - do_nothing
+inference:
+  model_type: meta-llama/Meta-Llama-3-8B-Instruct   # paper backend (App. C.4)
+  server_url:
+    - host: 127.0.0.1
+      ports: [8000]
