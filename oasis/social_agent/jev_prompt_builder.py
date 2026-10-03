@@ -108,17 +108,26 @@ class JEVPromptBuilder:
         "S": ("do_nothing", "do nothing"),
     }
 
-    # Base-OASIS agent prompt, verbatim (oasis/social_agent/agent.py,
-    # perform_action_by_llm). The classic path sends this as the user message and
-    # relies on the TOOL SCHEMAS to tell the model which actions exist. JEV has
-    # no tool schemas (it uses 1-token logit-bias), so build_task_instruction()
-    # reproduces this sentence AND enumerates the enabled actions explicitly --
-    # keeping JEV's prompt as close to base OASIS as possible while remaining
-    # driven by `available_actions`, never a hardcoded set.
+    # Base-OASIS agent prompt, VERBATIM. Upstream carries the anti-"just like"
+    # steer in TWO places, both reproduced here so JEV sees the same framing a
+    # classic agent does (base OASIS itself steers away from defaulting to
+    # `like` -- evidently the researchers hit the same over-like tendency the
+    # per-post classifier does):
+    #   1. the user message (oasis/social_agent/agent.py, perform_action_by_llm)
+    #   2. the env_template trailing line (oasis/social_agent/agent_environment.py)
+    # The classic path relies on TOOL SCHEMAS to name the actions; JEV has no
+    # tool schemas, so build_task_instruction() also enumerates the ENABLED
+    # actions (from available_actions), never a hardcoded set.
     OASIS_PROMPT_STEM: str = (
         "Please perform social media actions after observing the platform "
         "environments. Notice that don't limit your actions for example to "
         "just like the posts."
+    )
+    # Verbatim trailing steer from agent_environment.py env_template.
+    OASIS_ENV_STEER: str = (
+        "Pick one action you want to perform that best reflects your current "
+        "inclination based on your profile and the post content. Do not limit "
+        "your action in just `like` to like posts."
     )
 
     @classmethod
@@ -129,7 +138,8 @@ class JEVPromptBuilder:
         (the same set that drives the logit-bias), so a run that enables only
         [like_post, repost, follow, do_nothing] advertises exactly L/R/F/S and
         never mentions Quote/Comment the classifier cannot emit. The wording
-        reuses base OASIS's own prompt sentence (OASIS_PROMPT_STEM) for 1:1
+        reproduces base OASIS's own prompt lines (OASIS_PROMPT_STEM +
+        OASIS_ENV_STEER, both carrying upstream's anti-"just like" steer) for 1:1
         parity, then lists the enabled single-letter actions. Byte-identical for
         a given `allowed_chars`, so it still caches at the RadixAttention root.
         """
@@ -143,6 +153,7 @@ class JEVPromptBuilder:
         letters = "/".join(chars)
         return (
             f"{cls.OASIS_PROMPT_STEM}\n"
+            f"{cls.OASIS_ENV_STEER}\n"
             f"For the post below, choose exactly ONE action and output ONLY its "
             f"letter ({letters}):\n"
             f"{menu}.\n\n"
