@@ -254,6 +254,13 @@ async def running(
             feed_mode=(os.environ.get("OASIS_JEV_FEED_MODE", "0") == "1"),
             # Use the EXACT upstream OASIS prompt (OASIS_JEV_VERBATIM=1).
             verbatim_prompt=(os.environ.get("OASIS_JEV_VERBATIM", "0") == "1"),
+            # COMPETITIVE per-post experiment (OASIS_JEV_COMPETITIVE=1): keep the
+            # per-post 1-token path (cache intact) but add scarcity framing + do
+            # cross-feed full-logits selection instead of argmax-then-budget.
+            competitive_mode=(os.environ.get("OASIS_JEV_COMPETITIVE", "0") == "1"),
+            # Where to dump the per-post P(R) vs P(L) confidence-gap CSV. Set via
+            # OASIS_JEV_CONF_DUMP; empty => no dump.
+            confidence_dump_path=(os.environ.get("OASIS_JEV_CONF_DUMP") or None),
             # The driver already calls infra.update_rec_table() once per step
             # (the expensive twhin-BERT embedding pass). Don't let step_jev run
             # it a SECOND time -- that doubled the heaviest op every step.

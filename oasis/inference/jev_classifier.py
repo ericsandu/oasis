@@ -425,6 +425,161 @@ def select_best_action(
     return max(non_skips, key=lambda r: r.confidence)
 
 
+def resolve_competitive_full_logits(
+    results: list[ClassificationResult],
+    budget: int = 1,
+    skip_char: str = "S",
+    downgrade_to_skip: bool = True,
+) -> list[ClassificationResult]:
+    """Competitive per-post selection over the FULL per-action logits of a feed.
+
+    The default pipeline (resolve_intra_feed_budget) first collapses each post to
+    its argmax action, THEN picks the agent's one action by comparing those
+    argmax confidences. Under a uniform action bias + greedy/low-mass Repost,
+    every post collapses to Like, so the budget stage only ever compares
+    "best Like vs best Like" -- a confident Repost is discarded per-post before
+    the comparison ever runs.
+
+    This resolver instead keeps every post's full per-action logit dict and, for
+    each agent, picks the single (post, action) pair whose per-action softmax
+    probability is highest ACROSS the whole feed and across all NON-SKIP actions.
+    So a post where Repost is the model's second choice but still high-probability
+    can win the agent's one slot over a post where Like barely edged everything.
+
+    NO action weighting: the score is the raw model probability P(action|post)
+    read from softmax(result.logits). A 0.60 Like still beats a 0.40 Repost; the
+    only change from the default is that we no longer throw the Repost signal away
+    before comparing. Pairs the SCARCITY-FRAMED prompt (which tells the model only
+    its single strongest action across all posts executes) with a selection rule
+    that can actually act on that framing.
+
+    Args:
+        results: Evaluated results across one or more users (full logits populated).
+        budget: Max non-skip actions per user (default 1).
+        skip_char: The no-op action character.
+        downgrade_to_skip: Convert non-selected items to skip (preserves ordering).
+
+    Returns:
+        List of ClassificationResult respecting budget, where each surviving
+        non-skip item's action_char/confidence is set to the WINNING
+        (post, action) chosen by cross-feed full-logits comparison.
+    """
+    if not results or budget < 0:
+        return list(results)
+
+    user_items: dict[int, list[tuple[int, ClassificationResult]]] = defaultdict(
+        list
+    )
+    for idx, res in enumerate(results):
+        user_items[res.user_id].append((idx, res))
+
+    resolved_map: dict[int, ClassificationResult] = {}
+
+    for items in user_items.values():
+        # Build the candidate set: for every post, every NON-SKIP action with a
+        # captured logit, scored by its per-post softmax probability.
+        # candidate = (score, idx, action_char)
+        candidates: list[tuple[float, int, str]] = []
+        for idx, res in items:
+            probs = compute_softmax(res.logits) if res.logits else {}
+            for act, p in probs.items():
+                if act == skip_char:
+                    continue
+                candidates.append((p, idx, act))
+
+        if not candidates:
+            # Nothing actionable -> keep originals (all skips / empty logits)
+            for idx, res in items:
+                resolved_map[idx] = res
+            continue
+
+        # Highest raw probability across the whole feed wins the agent's slot(s).
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        winners: dict[int, tuple[str, float]] = {}
+        for score, idx, act in candidates:
+            if len(winners) >= budget:
+                break
+            if idx not in winners:  # one winning action per post slot
+                winners[idx] = (act, score)
+
+        for idx, res in items:
+            if idx in winners:
+                win_act, win_score = winners[idx]
+                resolved_map[idx] = ClassificationResult(
+                    user_id=res.user_id,
+                    post_id=res.post_id,
+                    action_char=win_act,
+                    confidence=win_score,
+                    logits=dict(res.logits),
+                    comment_text=res.comment_text,
+                    quote_text=res.quote_text,
+                )
+            else:
+                if downgrade_to_skip:
+                    skip_conf = (
+                        compute_softmax(res.logits).get(skip_char, 0.0)
+                        if res.logits else 0.0
+                    )
+                    resolved_map[idx] = ClassificationResult(
+                        user_id=res.user_id,
+                        post_id=res.post_id,
+                        action_char=skip_char,
+                        confidence=skip_conf,
+                        logits=dict(res.logits),
+                    )
+                # else: dropped
+
+    return [
+        resolved_map[idx]
+        for idx in range(len(results))
+        if idx in resolved_map
+    ]
+
+
+def dump_action_confidence_gap(
+    results: list[ClassificationResult],
+    like_char: str = "L",
+    repost_char: str = "R",
+) -> list[dict[str, float]]:
+    """Per-post P(Repost) vs P(Like) comparison across every evaluated item.
+
+    Reads the raw per-action logits captured during classification and reports,
+    for each (agent, post), the model's softmax probability for Like and Repost
+    and their gap P(R) - P(L). This is the headline measurement: whether Repost
+    is genuinely tiny on every post, or second-but-close on some -- the thing
+    that decides whether competitive feed-level selection can surface it.
+
+    No weighting, no bias correction beyond the uniform action-bias which cancels
+    in the softmax: these are the model's own relative preferences.
+
+    Args:
+        results: Raw (pre-budget) classification results with full logits.
+        like_char: Action char for Like.
+        repost_char: Action char for Repost.
+
+    Returns:
+        One row per item: {user_id, post_id, p_like, p_repost, gap_r_minus_l,
+        argmax_action, r_present (1/0 whether Repost appeared in top-logprobs)}.
+    """
+    rows: list[dict[str, float]] = []
+    for res in results:
+        probs = compute_softmax(res.logits) if res.logits else {}
+        p_like = probs.get(like_char, 0.0)
+        p_repost = probs.get(repost_char, 0.0)
+        rows.append(
+            {
+                "user_id": float(res.user_id),
+                "post_id": float(res.post_id),
+                "p_like": p_like,
+                "p_repost": p_repost,
+                "gap_r_minus_l": p_repost - p_like,
+                "r_present": 1.0 if repost_char in (res.logits or {}) else 0.0,
+                "l_present": 1.0 if like_char in (res.logits or {}) else 0.0,
+            }
+        )
+    return rows
+
+
 class MockJEVClassifierClient:
     """Deterministic, hermetic JEV classifier client for unit tests without GPU or network.
 

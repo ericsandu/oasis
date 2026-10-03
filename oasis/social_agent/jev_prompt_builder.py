@@ -137,7 +137,11 @@ class JEVPromptBuilder:
     )
 
     @classmethod
-    def build_task_instruction(cls, allowed_chars: Sequence[str] | None = None) -> str:
+    def build_task_instruction(
+        cls,
+        allowed_chars: Sequence[str] | None = None,
+        competitive: bool = False,
+    ) -> str:
         """Render the run-constant instruction preamble from the ENABLED actions.
 
         Not a hardcoded menu: the action list is derived from `allowed_chars`
@@ -148,6 +152,16 @@ class JEVPromptBuilder:
         OASIS_ENV_STEER, both carrying upstream's anti-"just like" steer) for 1:1
         parity, then lists the enabled single-letter actions. Byte-identical for
         a given `allowed_chars`, so it still caches at the RadixAttention root.
+
+        When `competitive` is True, a SCARCITY-FRAMING line is added: it tells the
+        agent it is seeing one of MANY posts and that only its single strongest
+        action across all of them will actually execute. This gives the isolated
+        per-post call the competition/scarcity context classic has implicitly
+        (classic sees the whole feed but gets one action), so the model has a
+        reason to "hold out" a high-impact action (Repost) rather than spend the
+        slot on a cheap Like it would pick for every post in isolation. The line
+        is run-constant, so the root-cache property is preserved (a distinct but
+        still single cached root for competitive runs).
         """
         chars = [c for c in (allowed_chars or cls.VALID_ACTIONS)
                  if c in cls.ACTION_DESCRIPTIONS]
@@ -157,9 +171,19 @@ class JEVPromptBuilder:
             f"{c} ({cls.ACTION_DESCRIPTIONS[c][1]})" for c in chars
         )
         letters = "/".join(chars)
+        scarcity = ""
+        if competitive:
+            scarcity = (
+                "You are seeing MANY posts this round, but only ONE action -- "
+                "your single strongest choice across all of them -- will actually "
+                "be performed. Reserve a high-impact action (such as repost) for "
+                "the post that most deserves it; do not spend your one action on a "
+                "low-value reaction to a post you merely find agreeable.\n"
+            )
         return (
             f"{cls.OASIS_PROMPT_STEM}\n"
             f"{cls.OASIS_ENV_STEER}\n"
+            f"{scarcity}"
             f"For the post below, choose exactly ONE action and output ONLY its "
             f"letter ({letters}):\n"
             f"{menu}.\n\n"
@@ -306,6 +330,7 @@ class JEVPromptBuilder:
         post: PostPrefixData,
         agent: AgentSuffixData,
         allowed_chars: Sequence[str] | None = None,
+        competitive: bool = False,
     ) -> str:
         """Concatenates instruction + post prefix + agent suffix into one eval prompt.
 
@@ -330,7 +355,7 @@ class JEVPromptBuilder:
         Returns:
             Complete assembled prompt ready for batched model forward pass.
         """
-        instruction = cls.build_task_instruction(allowed_chars)
+        instruction = cls.build_task_instruction(allowed_chars, competitive=competitive)
         prefix = cls.build_post_prefix(post)
         suffix = cls.build_agent_suffix(agent, topic=post.topic)
         return f"{instruction}{prefix}{suffix}"

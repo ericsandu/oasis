@@ -68,6 +68,8 @@ from oasis.inference.jev_classifier import (
     JEVClassifierClient,
     MockJEVClassifierClient,
     resolve_intra_feed_budget,
+    resolve_competitive_full_logits,
+    dump_action_confidence_gap,
 )
 from oasis.social_agent.agent import SocialAgent
 from oasis.social_agent.agent_graph import AgentGraph
@@ -133,6 +135,19 @@ class JEVExecutionConfig:
     # via build_verbatim_prompt, for both per-post and feed mode. Default False
     # (the compact inverted-cache prompt).
     verbatim_prompt: bool = False
+    # COMPETITIVE per-post mode: keep the per-post 1-token classify path (and its
+    # KV-cache sharing), but (1) frame each post call with SCARCITY context (the
+    # agent sees N posts and only its single strongest action across all of them
+    # executes) and (2) at compile time, replace the argmax-then-budget collapse
+    # with cross-feed full-logits selection (resolve_competitive_full_logits):
+    # pick the single (post, action) with the highest raw P(action|post) across
+    # the whole feed, so a confident Repost is not discarded per-post before the
+    # comparison. No action weighting. Also dumps per-post P(R) vs P(L) to CSV.
+    # Default False (standard per-post argmax-then-budget).
+    competitive_mode: bool = False
+    # Path to write the per-post P(R) vs P(L) confidence-gap CSV when
+    # competitive_mode (or confidence_dump) is on. None => no dump.
+    confidence_dump_path: str | None = None
     default_topic: str = "general"
     seed: int | None = None
     downgrade_to_skip: bool = True
@@ -759,6 +774,37 @@ class JEVEnvironment(OasisEnv):
             )
         return self.belief_states[user_id]
 
+    def _write_confidence_dump(self, rows: list) -> None:
+        """Append per-post P(R) vs P(L) rows to the confidence-gap CSV.
+
+        Writes a header on first use (tracked by self._conf_dump_header_written),
+        then appends one line per (agent, post) item each step so the whole run
+        accumulates into one file. Best-effort: dump failures never abort a step.
+        """
+        path = self.config.confidence_dump_path
+        if not path or not rows:
+            return
+        try:
+            import csv
+            import os
+
+            cols = [
+                "user_id", "post_id", "p_like", "p_repost",
+                "gap_r_minus_l", "r_present", "l_present",
+            ]
+            write_header = not getattr(self, "_conf_dump_header_written", False)
+            mode = "w" if write_header else "a"
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with open(path, mode, newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=cols)
+                if write_header:
+                    w.writeheader()
+                    self._conf_dump_header_written = True
+                for r in rows:
+                    w.writerow({c: r.get(c, "") for c in cols})
+        except Exception as e:  # noqa: BLE001
+            logger.warning("confidence dump write failed: %s", e)
+
     def set_belief_state(self, user_id: int, state: BeliefState) -> None:
         """Assign or override BeliefState for a user."""
         self.belief_states[user_id] = state
@@ -1003,6 +1049,7 @@ class JEVEnvironment(OasisEnv):
                     full_prompt = JEVPromptBuilder.assemble_eval_prompt(
                         post_prefix, agent_suffix,
                         allowed_chars=self.config.allowed_actions,
+                        competitive=self.config.competitive_mode,
                     )
 
                 eval_item = EvalItem(
@@ -1091,12 +1138,26 @@ class JEVEnvironment(OasisEnv):
                 eval_items, generate_comments=False
             )
 
-        # Stage e: Resolve intra-feed budget constraints
-        resolved_results = resolve_intra_feed_budget(
-            raw_results,
-            budget=self.config.max_actions_per_agent,
-            downgrade_to_skip=self.config.downgrade_to_skip,
-        )
+        # Stage e: Resolve intra-feed budget constraints.
+        # In competitive_mode, dump the per-post P(R) vs P(L) gap (the headline
+        # measurement) and select via cross-feed FULL-logits comparison instead
+        # of the argmax-then-budget collapse (which discards Repost per-post).
+        if self.config.competitive_mode and not self.config.feed_mode:
+            if self.config.confidence_dump_path:
+                self._write_confidence_dump(
+                    dump_action_confidence_gap(raw_results)
+                )
+            resolved_results = resolve_competitive_full_logits(
+                raw_results,
+                budget=self.config.max_actions_per_agent,
+                downgrade_to_skip=self.config.downgrade_to_skip,
+            )
+        else:
+            resolved_results = resolve_intra_feed_budget(
+                raw_results,
+                budget=self.config.max_actions_per_agent,
+                downgrade_to_skip=self.config.downgrade_to_skip,
+            )
 
         # Stage f: Conditional comment and quote generation fallback for surviving 'C' and 'Q' actions
         comment_requests: list[tuple[int, str, str]] = []
