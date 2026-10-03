@@ -17,3 +17,22 @@ import sys
 # Add the project root directory to sys.path
 root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
 sys.path.insert(0, root_path)
+
+import unittest.mock as mock
+
+for mod in [
+    "torch",
+    "sentence_transformers",
+    "transformers",
+    "sklearn",
+    "sklearn.feature_extraction",
+    "sklearn.feature_extraction.text",
+    "sklearn.metrics",
+    "sklearn.metrics.pairwise",
+]:
+    if mod not in sys.modules:
+        try:
+            __import__(mod)
+        except ImportError:
+            sys.modules[mod] = mock.MagicMock()
+

@@ -130,3 +130,8 @@ gorse_data.db*
 container/
 .hermes_workspace/
 experiments/scratch/
+scratch/
+.kiro/
+.kirograph/
+baseline_*/
+cib_results.json

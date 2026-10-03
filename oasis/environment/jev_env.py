@@ -160,6 +160,10 @@ class JEVExecutionConfig:
     # Follow) under reframing. Applied to raw_results before budget resolution.
     # Pairs naturally with guided_choice (correct per-letter logits). Default off.
     l0_debias: bool = False
+    # Multiplier on the subtracted per-letter profile (default 1.0 = full AnyJev
+    # L0 mean subtraction). Values in [0.5, 0.75] retain a legitimate skewed
+    # marginal (e.g. repost majority) while eliminating content-free letter bias.
+    l0_prior_strength: float = 1.0
     # When True, compute the L0 per-letter mean within each user's own feed
     # items instead of across the whole batch. Default False (global batch mean).
     l0_group_by_user: bool = False
@@ -807,8 +811,8 @@ class JEVEnvironment(OasisEnv):
             import os
 
             cols = [
-                "user_id", "post_id", "p_like", "p_repost",
-                "gap_r_minus_l", "r_present", "l_present",
+                "user_id", "post_id", "p_like", "p_repost", "p_follow", "p_skip",
+                "gap_r_minus_l", "r_present", "l_present", "f_present", "s_present",
             ]
             write_header = not getattr(self, "_conf_dump_header_written", False)
             mode = "w" if write_header else "a"
@@ -1173,7 +1177,9 @@ class JEVEnvironment(OasisEnv):
         if (self.config.l0_debias and not self.config.feed_mode
                 and not self.config.generative_mode):
             raw_results = apply_l0_debias(
-                raw_results, group_by_user=self.config.l0_group_by_user
+                raw_results,
+                group_by_user=self.config.l0_group_by_user,
+                prior_strength=self.config.l0_prior_strength,
             )
 
         # Stage e: Resolve intra-feed budget constraints.

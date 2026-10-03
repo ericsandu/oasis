@@ -95,8 +95,9 @@ OASIS_JEV_GUIDED_CHOICE=1   # vLLM structured_outputs CHOICE masking (not logit-
 OASIS_JEV_GENERATIVE=1      # native generation of {"action":"..."} per post
 OASIS_JEV_INSTRUCT_FRAME=1  # wrap raw completion prompt in Llama-3 instruct template
 OASIS_JEV_L0=1              # AnyJev L0 debias (per-letter batch-mean, prior='none') — VALIDATED
+OASIS_JEV_L0_STRENGTH=0.75  # L0 damping factor alpha (default 1.0; 0.75 preserves skewed repost majority)
 OASIS_JEV_L0_GROUP=1        # L0 mean per-user instead of whole-batch
-OASIS_JEV_CONF_DUMP=<path>  # per-post P(like)/P(repost) CSV dump
+OASIS_JEV_CONF_DUMP=<path>  # per-post full 4-action probability CSV dump (p_like, p_repost, p_follow, p_skip)
 OASIS_JEV_CLASSIFY_TEMP=1.0 # classifier sampling temperature (default now 1.0)
 OASIS_CLASSIC_TOOL_CHOICE=auto  # classic leg tool_choice (auto = paper-faithful)
 ```
@@ -386,15 +387,19 @@ except feed_mode (which supersedes the per-post branches).
 > VALIDATED (repost 16→86, NRMSE 0.73→0.24, 0.325 vs real ≈ paper, 1.95× speed).
 > The steps below are ordered to execute that transition.
 
-### P0 — Fix L0 over-flatten with a strength knob (Phase 1; no rebuild, ~1 line)
+### P0 — Fix L0 over-flatten with a strength knob (Phase 1; DONE & TESTED)
 L0 at full strength over-flattened our skewed marginal (repost 107→86, like/follow
-inflated, do_nothing→0, follow(table) 94→154). Add `prior_strength` (scale the
-subtracted per-letter profile by 0.5/0.75/1.0) to `apply_l0_debias` and sweep it.
+inflated, do_nothing→0, follow(table) 94→154). We added `prior_strength` (scale the
+subtracted per-letter profile by alpha, e.g. 0.5/0.75/1.0 via `OASIS_JEV_L0_STRENGTH`)
+to `apply_l0_debias`, wired it through `JEVExecutionConfig` and `twitter_simulation_large.py`,
+and verified it with unit tests in `test/agent/test_jev_l0_debias.py`.
 The AnyJev study's default is **0.75** precisely to preserve a legitimate majority on
-skewed marginals — expect repost to climb back toward classic's ~107 at 0.75. Match
-classic's *action MIX*, not just cascade scale. This also fixes the issue a reader
-asked about (the "near-doubling": over-flatten converted do-nothing/default turns
-into active like/follow actions).
+skewed marginals — expect repost to climb back toward classic's ~107 at 0.75.
+Launch command:
+```bash
+sbatch --export=ALL,OASIS_JEV_L0=1,OASIS_JEV_L0_STRENGTH=0.75 \
+  examples/experiment/jev_information_spreading/run_compare.sbatch
+```
 
 ### P1 — Adopt the AnyJev library as the backend (Phase 2; needs SIF rebuild)
 Implement `AnyJevClassifierClient` behind the existing `classify_batch` interface
@@ -402,9 +407,9 @@ Implement `AnyJevClassifierClient` behind the existing `classify_batch` interfac
 rebuild the SIF (audit vllm-0.23/torch dep compatibility first). A/B against our
 inline L0 — they should match within noise (both perm-only L0). Use `prior="none"`.
 
-### P1b — Cheap diagnostics worth having (one job each)
-1. **Fix `dump_action_confidence_gap` to log all 4 actions** (currently only
-   p_like/p_repost — the instruct-frame caveat §3.2 showed this hid P(F) dominance).
+### P1b — Cheap diagnostics worth having
+1. **Fix `dump_action_confidence_gap` to log all 4 actions** — **DONE & TESTED**.
+   Logs `p_like`, `p_repost`, `p_follow`, `p_skip` alongside presence flags in CSV.
 2. **Measure `order_flip_raw`** (reverse the action list, re-run) — the zero-label
    predictor of perm gain; documents how brittle raw was vs L0-fixed.
 

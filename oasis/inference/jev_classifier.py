@@ -551,14 +551,16 @@ def dump_action_confidence_gap(
     results: list[ClassificationResult],
     like_char: str = "L",
     repost_char: str = "R",
+    follow_char: str = "F",
+    skip_char: str = "S",
 ) -> list[dict[str, float]]:
-    """Per-post P(Repost) vs P(Like) comparison across every evaluated item.
+    """Per-post action probabilities across every evaluated item.
 
     Reads the raw per-action logits captured during classification and reports,
-    for each (agent, post), the model's softmax probability for Like and Repost
-    and their gap P(R) - P(L). This is the headline measurement: whether Repost
-    is genuinely tiny on every post, or second-but-close on some -- the thing
-    that decides whether competitive feed-level selection can surface it.
+    for each (agent, post), the model's softmax probability for Like, Repost,
+    Follow, and Skip, as well as the headline gap P(R) - P(L). Logging all four
+    actions ensures dominance by unmodelled actions (such as Follow spikes under
+    instruct framing) is immediately visible in telemetry.
 
     No weighting, no bias correction beyond the uniform action-bias which cancels
     in the softmax: these are the model's own relative preferences.
@@ -567,25 +569,33 @@ def dump_action_confidence_gap(
         results: Raw (pre-budget) classification results with full logits.
         like_char: Action char for Like.
         repost_char: Action char for Repost.
+        follow_char: Action char for Follow.
+        skip_char: Action char for Skip / No-op.
 
     Returns:
-        One row per item: {user_id, post_id, p_like, p_repost, gap_r_minus_l,
-        argmax_action, r_present (1/0 whether Repost appeared in top-logprobs)}.
+        One row per item: {user_id, post_id, p_like, p_repost, p_follow, p_skip,
+        gap_r_minus_l, r_present, l_present, f_present, s_present}.
     """
     rows: list[dict[str, float]] = []
     for res in results:
         probs = compute_softmax(res.logits) if res.logits else {}
         p_like = probs.get(like_char, 0.0)
         p_repost = probs.get(repost_char, 0.0)
+        p_follow = probs.get(follow_char, 0.0)
+        p_skip = probs.get(skip_char, 0.0)
         rows.append(
             {
                 "user_id": float(res.user_id),
                 "post_id": float(res.post_id),
                 "p_like": p_like,
                 "p_repost": p_repost,
+                "p_follow": p_follow,
+                "p_skip": p_skip,
                 "gap_r_minus_l": p_repost - p_like,
                 "r_present": 1.0 if repost_char in (res.logits or {}) else 0.0,
                 "l_present": 1.0 if like_char in (res.logits or {}) else 0.0,
+                "f_present": 1.0 if follow_char in (res.logits or {}) else 0.0,
+                "s_present": 1.0 if skip_char in (res.logits or {}) else 0.0,
             }
         )
     return rows
@@ -595,6 +605,7 @@ def apply_l0_debias(
     results: list[ClassificationResult],
     skip_char: str = "S",
     group_by_user: bool = False,
+    prior_strength: float = 1.0,
 ) -> list[ClassificationResult]:
     """AnyJev L0 permutation-debias (prior='none' variant), implemented as
     per-label-token mean subtraction over the batch.
@@ -616,6 +627,9 @@ def apply_l0_debias(
     skewed (repost-dominant on this experiment) and the AnyJev study shows the
     batch prior HURTS skewed marginals. This is the safe half of L0.
 
+    When prior_strength < 1.0 (e.g. 0.75), we damp the subtracted profile by
+    alpha to prevent over-flattening legitimately dominant action classes.
+
     After debiasing each item's logits, we re-softmax and re-pick the argmax
     non-skip-aware action. logits are REPLACED with the debiased values so the
     confidence dump and downstream budget see the corrected distribution.
@@ -626,6 +640,10 @@ def apply_l0_debias(
         group_by_user: if True, compute the per-letter mean within each user's
             own items instead of across the whole batch. Default False (global
             batch mean), matching AnyJev's batch-level profile.
+        prior_strength: scaling factor alpha on the subtracted profile mean.
+            Default 1.0 (standard L0). Damping with alpha in [0.5, 0.75] preserves
+            a genuine skewed marginal (e.g. repost majority) while eliminating
+            content-free letter bias.
 
     Returns:
         New list, same order, with debiased action_char/confidence/logits.
@@ -654,7 +672,8 @@ def apply_l0_debias(
     for r in results:
         profile = profiles[r.user_id] if group_by_user else global_profile
         debiased = {
-            ch: lp - profile.get(ch, 0.0) for ch, lp in (r.logits or {}).items()
+            ch: lp - prior_strength * profile.get(ch, 0.0)
+            for ch, lp in (r.logits or {}).items()
         }
         if not debiased:
             out.append(r)
