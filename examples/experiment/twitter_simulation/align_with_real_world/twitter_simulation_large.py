@@ -244,15 +244,18 @@ async def running(
         # hand-picked / colliding token ids. When on, logit_bias/token_id_map are
         # NOT passed (the choice grammar supersedes them).
         _use_guided = os.environ.get("OASIS_JEV_GUIDED_CHOICE", "0") == "1"
+        _instruct_frame = os.environ.get("OASIS_JEV_INSTRUCT_FRAME", "0") == "1"
         social_log.info(
-            "JEV ENABLED: actions=%s url=%s classify_temp=%.2f guided_choice=%s",
-            allowed_chars, jev_url, _jev_temp, _use_guided)
+            "JEV ENABLED: actions=%s url=%s classify_temp=%.2f guided_choice=%s "
+            "instruct_frame=%s",
+            allowed_chars, jev_url, _jev_temp, _use_guided, _instruct_frame)
         _jev_cfg = JEVExecutionConfig(
             classifier_client=VLLMJEVClassifierClient(
                 base_url=jev_url, model_name=jev_model,
                 logit_bias=(None if _use_guided else logit_bias),
                 token_id_map=(None if _use_guided else token_id_map),
                 guided_choice_actions=(allowed_chars if _use_guided else None),
+                instruct_frame=_instruct_frame,
                 temperature=_jev_temp),
             max_actions_per_agent=1,
             enable_belief_updates=False,

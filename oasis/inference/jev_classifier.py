@@ -66,6 +66,16 @@ DEFAULT_ACTION_TOKEN_MAP: dict[str, list[int]] = {
     "S": [50, 328, 336, 82, 83],
 }
 
+# Llama-3 INSTRUCT chat-template wrapper (verified byte-exact against the served
+# tokenizer's apply_chat_template(add_generation_prompt=True)). Used by
+# instruct_frame to wrap a raw completion prompt so /v1/completions asks the
+# question of the instruct-aligned model (inside the user/assistant header
+# frame) instead of the raw continuation model. {body} = the raw prompt.
+LLAMA3_INSTRUCT_FRAME: str = (
+    "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n"
+    "{body}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+)
+
 # Strict JSON Schema Grammar definition for structured output fallbacks
 ACTION_JSON_SCHEMA: dict[str, Any] = {
     "type": "json_schema",
@@ -883,6 +893,7 @@ class VLLMJEVClassifierClient:
         max_concurrent_comments: int = 8,
         auto_discover_token_ids: bool = False,
         guided_choice_actions: Sequence[str] | None = None,
+        instruct_frame: bool = False,
     ) -> None:
         """Initializes the vLLM classifier client.
 
@@ -931,6 +942,13 @@ class VLLMJEVClassifierClient:
         self.guided_choice_actions = (
             list(guided_choice_actions) if guided_choice_actions else None
         )
+        # When True, wrap each raw completion prompt in the Llama-3 INSTRUCT chat
+        # template before sending to /v1/completions, so single-token
+        # classification asks its question of the instruct-aligned model (inside
+        # the user/assistant header frame) rather than the raw continuation
+        # model. Isolates "instruct frame" from "generation": tests whether a
+        # correctly-framed single-token classifier matches the generative path.
+        self.instruct_frame = instruct_frame
         self._token_bias_initialized = False
 
         self._own_client = client is None
@@ -1069,6 +1087,10 @@ class VLLMJEVClassifierClient:
             await self._ensure_token_bias()
 
         prompts = [item.full_prompt for item in items]
+        if self.instruct_frame:
+            prompts = [
+                LLAMA3_INSTRUCT_FRAME.format(body=p) for p in prompts
+            ]
         endpoint = f"{self.base_url}/completions"
 
         payload: dict[str, Any] = {
