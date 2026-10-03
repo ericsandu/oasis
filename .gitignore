@@ -99,3 +99,34 @@ models/
 *.sqlite
 
 tmp
+
+# ---- HPC / JEV experiment artifacts (keep out of the repo tree) ----
+# Apptainer/Singularity images (multi-GB) -- NEVER commit; a stray `git stash -u`
+# or `git clean` would otherwise sweep the SIF out of the tree.
+*.sif
+*.simg
+# SLURM job output
+slurm-*.out
+slurm_*.out
+slurm_*.err
+*.out
+*.err
+# Ad-hoc probe/diagnostic scripts + their logs
+probe*.py
+probe*_*.out
+probe*_*.err
+# Log directories
+log/
+logs/
+# Simulation databases + sqlite WAL/SHM sidecars
+data/simu_db/
+*.db-shm
+*.db-wal
+# Recsys/Gorse caches
+gorse_*.db
+gorse_cache.db*
+gorse_data.db*
+# Scratch / container build dirs
+container/
+.hermes_workspace/
+experiments/scratch/
