@@ -243,8 +243,17 @@ async def running(
         # the faithful analogue of classic's tool-call generation, with no
         # hand-picked / colliding token ids. When on, logit_bias/token_id_map are
         # NOT passed (the choice grammar supersedes them).
-        _use_guided = os.environ.get("OASIS_JEV_GUIDED_CHOICE", "0") == "1"
+        _use_l0 = os.environ.get("OASIS_JEV_L0", "0") == "1"
+        _l0_strength = float(os.environ.get("OASIS_JEV_L0_STRENGTH", "1.0"))
+        # L0 debias operates on action-letter logprobs, requiring guided_choice
+        # to ensure all candidate letters produce valid logprobs without token-ID bias.
+        _use_guided = (os.environ.get("OASIS_JEV_GUIDED_CHOICE", "0") == "1") or _use_l0
         _instruct_frame = os.environ.get("OASIS_JEV_INSTRUCT_FRAME", "0") == "1"
+        print(
+            f"[JEV CONFIG] actions={allowed_chars} url={jev_url} temp={_jev_temp} "
+            f"guided_choice={_use_guided} l0_debias={_use_l0} (strength={_l0_strength}) "
+            f"instruct_frame={_instruct_frame}"
+        )
         social_log.info(
             "JEV ENABLED: actions=%s url=%s classify_temp=%.2f guided_choice=%s "
             "instruct_frame=%s",
@@ -281,8 +290,8 @@ async def running(
             # bias (permutation-only / prior='none') after classification. Pairs
             # with guided_choice. OASIS_JEV_L0_GROUP=1 => per-user mean.
             # OASIS_JEV_L0_STRENGTH controls the profile damping (default 1.0; 0.75 recommended).
-            l0_debias=(os.environ.get("OASIS_JEV_L0", "0") == "1"),
-            l0_prior_strength=float(os.environ.get("OASIS_JEV_L0_STRENGTH", "1.0")),
+            l0_debias=_use_l0,
+            l0_prior_strength=_l0_strength,
             l0_group_by_user=(os.environ.get("OASIS_JEV_L0_GROUP", "0") == "1"),
             # Where to dump the per-post P(R) vs P(L) confidence-gap CSV. Set via
             # OASIS_JEV_CONF_DUMP; empty => no dump.

@@ -397,7 +397,7 @@ The AnyJev study's default is **0.75** precisely to preserve a legitimate majori
 skewed marginals — expect repost to climb back toward classic's ~107 at 0.75.
 Launch command:
 ```bash
-sbatch --export=ALL,OASIS_JEV_L0=1,OASIS_JEV_L0_STRENGTH=0.75 \
+sbatch --export=ALL,OASIS_JEV_GUIDED_CHOICE=1,OASIS_JEV_L0=1,OASIS_JEV_L0_STRENGTH=0.75 \
   examples/experiment/jev_information_spreading/run_compare.sbatch
 ```
 
