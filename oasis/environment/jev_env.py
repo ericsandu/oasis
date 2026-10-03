@@ -1142,11 +1142,15 @@ class JEVEnvironment(OasisEnv):
         # In competitive_mode, dump the per-post P(R) vs P(L) gap (the headline
         # measurement) and select via cross-feed FULL-logits comparison instead
         # of the argmax-then-budget collapse (which discards Repost per-post).
+        #
+        # The P(action) confidence dump runs whenever confidence_dump_path is set
+        # (any per-post mode), INDEPENDENT of competitive_mode -- it only reads
+        # raw_results' logits and never alters selection.
+        if self.config.confidence_dump_path and not self.config.feed_mode:
+            self._write_confidence_dump(
+                dump_action_confidence_gap(raw_results)
+            )
         if self.config.competitive_mode and not self.config.feed_mode:
-            if self.config.confidence_dump_path:
-                self._write_confidence_dump(
-                    dump_action_confidence_gap(raw_results)
-                )
             resolved_results = resolve_competitive_full_logits(
                 raw_results,
                 budget=self.config.max_actions_per_agent,
