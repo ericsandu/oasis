@@ -101,6 +101,53 @@ class JEVPromptBuilder:
 
     VALID_ACTIONS: Sequence[str] = ("L", "R", "Q", "C", "F", "S")
 
+    SEMANTIC_ACTIONS: tuple[str, ...] = (
+        "like_post",
+        "repost",
+        "follow",
+        "do_nothing",
+    )
+
+    MCQ_OPTION_LETTERS: tuple[str, ...] = ("A", "B", "C", "D", "E", "F")
+
+    # Canonical mapping: Option letter -> (ActionChar, ActionName, Description)
+    # Places primary amplification action (repost) in Slot A to match diffusion dynamics.
+    MCQ_ACTION_SPECS: list[tuple[str, str, str]] = [
+        ("R", "repost", "Repost the post to your followers"),
+        ("L", "like_post", "Like the post"),
+        ("F", "follow", "Follow the post author"),
+        ("S", "do_nothing", "Do nothing (skip without interacting)"),
+        ("Q", "quote_post", "Quote the post with your commentary"),
+        ("C", "create_comment", "Write a comment on the post"),
+    ]
+
+    MCQ_LETTER_TO_CHAR: dict[str, str] = {
+        "A": "R",
+        "B": "L",
+        "C": "F",
+        "D": "S",
+        "E": "Q",
+        "F": "C",
+    }
+
+    MCQ_LETTER_TO_NAME: dict[str, str] = {
+        "A": "repost",
+        "B": "like_post",
+        "C": "follow",
+        "D": "do_nothing",
+        "E": "quote_post",
+        "F": "create_comment",
+    }
+
+    MCQ_CHAR_TO_LETTER: dict[str, str] = {
+        "R": "A",
+        "L": "B",
+        "F": "C",
+        "S": "D",
+        "Q": "E",
+        "C": "F",
+    }
+
     # Canonical action-char -> (tool name, human description) used to render the
     # action menu. Mirrors the align driver's char_by_name and the FunctionTool
     # names base OASIS exposes, so the JEV prompt lists the SAME actions a
@@ -112,6 +159,28 @@ class JEVPromptBuilder:
         "C": ("create_comment", "comment on the post"),
         "F": ("follow", "follow the post's author"),
         "S": ("do_nothing", "do nothing"),
+    }
+
+    ACTION_CHAR_TO_NAME: dict[str, str] = {
+        "L": "like_post",
+        "R": "repost",
+        "Q": "quote_post",
+        "C": "create_comment",
+        "F": "follow",
+        "S": "do_nothing",
+    }
+
+    ACTION_NAME_TO_CHAR: dict[str, str] = {
+        "like_post": "L",
+        "like": "L",
+        "repost": "R",
+        "quote_post": "Q",
+        "quote": "Q",
+        "create_comment": "C",
+        "comment": "C",
+        "follow": "F",
+        "do_nothing": "S",
+        "skip": "S",
     }
 
     # Base-OASIS agent prompt, VERBATIM. Upstream carries the anti-"just like"
@@ -137,40 +206,75 @@ class JEVPromptBuilder:
     )
 
     @classmethod
+    def resolve_action_specs(
+        cls,
+        allowed_chars: Sequence[str] | None = None,
+    ) -> list[tuple[str, str, str]]:
+        """Dynamically resolves the active actions for this experiment in canonical priority order.
+
+        Preserves canonical priority: Repost -> Like -> Follow -> Skip -> Quote -> Comment,
+        ensuring affirmative cascade actions are prioritized on supportive items.
+
+        Returns:
+            List of (action_char, action_name, action_description) tuples.
+        """
+        enabled_chars: set[str] = set()
+        if allowed_chars:
+            for item in allowed_chars:
+                if item.upper() in cls.ACTION_DESCRIPTIONS:
+                    enabled_chars.add(item.upper())
+                else:
+                    c = cls.ACTION_NAME_TO_CHAR.get(item.lower(), "")
+                    if c:
+                        enabled_chars.add(c)
+        if not enabled_chars:
+            enabled_chars = {"R", "L", "F", "S"}
+        if "S" not in enabled_chars:
+            enabled_chars.add("S")
+
+        return [spec for spec in cls.MCQ_ACTION_SPECS if spec[0] in enabled_chars]
+
+    @classmethod
+    def get_mcq_mappings(
+        cls,
+        allowed_chars: Sequence[str] | None = None,
+    ) -> tuple[dict[str, tuple[str, str]], dict[str, str], list[str]]:
+        """Dynamically builds option-letter mappings for the specific active actions in an experiment.
+
+        Returns:
+            (letter_to_action, action_to_letter, option_letters)
+            where letter_to_action maps e.g. 'A' -> ('R', 'repost'),
+            and option_letters is ['A', 'B', 'C', 'D'] matching active specs.
+        """
+        specs = cls.resolve_action_specs(allowed_chars)
+        letter_to_action: dict[str, tuple[str, str]] = {}
+        action_to_letter: dict[str, str] = {}
+        option_letters: list[str] = []
+        for idx, (ch, name, _desc) in enumerate(specs):
+            letter = cls.MCQ_OPTION_LETTERS[idx]
+            letter_to_action[letter] = (ch, name)
+            action_to_letter[ch] = letter
+            action_to_letter[name] = letter
+            option_letters.append(letter)
+        return letter_to_action, action_to_letter, option_letters
+
+    @classmethod
     def build_task_instruction(
         cls,
         allowed_chars: Sequence[str] | None = None,
         competitive: bool = False,
+        use_mcq_options: bool = True,
+        **kwargs: Any,
     ) -> str:
-        """Render the run-constant instruction preamble from the ENABLED actions.
+        """Render the run-constant instruction preamble dynamically from the ENABLED actions.
 
-        Not a hardcoded menu: the action list is derived from `allowed_chars`
-        (the same set that drives the logit-bias), so a run that enables only
-        [like_post, repost, follow, do_nothing] advertises exactly L/R/F/S and
-        never mentions Quote/Comment the classifier cannot emit. The wording
-        reproduces base OASIS's own prompt lines (OASIS_PROMPT_STEM +
-        OASIS_ENV_STEER, both carrying upstream's anti-"just like" steer) for 1:1
-        parity, then lists the enabled single-letter actions. Byte-identical for
-        a given `allowed_chars`, so it still caches at the RadixAttention root.
-
-        When `competitive` is True, a SCARCITY-FRAMING line is added: it tells the
-        agent it is seeing one of MANY posts and that only its single strongest
-        action across all of them will actually execute. This gives the isolated
-        per-post call the competition/scarcity context classic has implicitly
-        (classic sees the whole feed but gets one action), so the model has a
-        reason to "hold out" a high-impact action (Repost) rather than spend the
-        slot on a cheap Like it would pick for every post in isolation. The line
-        is run-constant, so the root-cache property is preserved (a distinct but
-        still single cached root for competitive runs).
+        Formats decisions as canonical discrete choice options (A, B, C, D) corresponding
+        to the TypeSafe Jev decision model paradigm, eliminating unigram continuation bias
+        while maintaining 100% byte-identical RadixAttention root KV-cache reuse.
         """
-        chars = [c for c in (allowed_chars or cls.VALID_ACTIONS)
-                 if c in cls.ACTION_DESCRIPTIONS]
-        if "S" not in chars:
-            chars.append("S")  # a no-op choice must always be available
-        menu = ", ".join(
-            f"{c} ({cls.ACTION_DESCRIPTIONS[c][1]})" for c in chars
-        )
-        letters = "/".join(chars)
+        specs = cls.resolve_action_specs(allowed_chars)
+        letter_to_action, _, option_letters = cls.get_mcq_mappings(allowed_chars)
+
         scarcity = ""
         if competitive:
             scarcity = (
@@ -180,6 +284,26 @@ class JEVPromptBuilder:
                 "the post that most deserves it; do not spend your one action on a "
                 "low-value reaction to a post you merely find agreeable.\n"
             )
+
+        if use_mcq_options:
+            menu_lines = [
+                f"({letter}) {desc}"
+                for letter, (_, _, desc) in zip(option_letters, specs)
+            ]
+            letters_str = ", ".join(option_letters)
+            return (
+                f"{cls.OASIS_PROMPT_STEM}\n"
+                f"{cls.OASIS_ENV_STEER}\n"
+                f"{scarcity}"
+                f"For the post below, choose exactly ONE action and output ONLY its option letter ({letters_str}):\n"
+                + "\n".join(menu_lines)
+                + ".\n\n"
+            )
+
+        enabled_chars = {s[0] for s in specs}
+        chars = [c for c in cls.VALID_ACTIONS if c in enabled_chars]
+        menu = ", ".join(f"{c} ({cls.ACTION_DESCRIPTIONS[c][1]})" for c in chars)
+        letters = "/".join(chars)
         return (
             f"{cls.OASIS_PROMPT_STEM}\n"
             f"{cls.OASIS_ENV_STEER}\n"
@@ -325,12 +449,67 @@ class JEVPromptBuilder:
         )
 
     @classmethod
+    def build_shared_prefix(
+        cls,
+        post: PostPrefixData,
+        allowed_chars: Sequence[str] | None = None,
+        competitive: bool = False,
+        use_mcq_options: bool = True,
+        **kwargs: Any,
+    ) -> str:
+        """Constructs the shared [Task Instruction] + [Post Prefix] slice.
+
+        This slice is 100% byte-for-byte identical across ALL candidate agents evaluating
+        the same post, guaranteeing maximum RadixAttention KV-cache prefix hits.
+
+        Args:
+            post: Shared post prefix data.
+            allowed_chars: Enabled actions for this run.
+            competitive: Whether scarcity framing is enabled.
+            use_mcq_options: Whether discrete choice (A, B, C, D) options are used.
+
+        Returns:
+            Byte-identical shared prefix string.
+        """
+        instruction = cls.build_task_instruction(
+            allowed_chars=allowed_chars,
+            competitive=competitive,
+            use_mcq_options=use_mcq_options,
+            **kwargs,
+        )
+        post_prefix = cls.build_post_prefix(post)
+        return f"{instruction}{post_prefix}"
+
+    @classmethod
+    def get_shared_prefix_hash(
+        cls,
+        post: PostPrefixData,
+        allowed_chars: Sequence[str] | None = None,
+        competitive: bool = False,
+        use_mcq_options: bool = True,
+        **kwargs: Any,
+    ) -> str:
+        """Returns the SHA-256 hex digest of the shared cacheable prefix."""
+        import hashlib
+
+        prefix_bytes = cls.build_shared_prefix(
+            post=post,
+            allowed_chars=allowed_chars,
+            competitive=competitive,
+            use_mcq_options=use_mcq_options,
+            **kwargs,
+        ).encode("utf-8")
+        return hashlib.sha256(prefix_bytes).hexdigest()
+
+    @classmethod
     def assemble_eval_prompt(
         cls,
         post: PostPrefixData,
         agent: AgentSuffixData,
         allowed_chars: Sequence[str] | None = None,
         competitive: bool = False,
+        use_mcq_options: bool = True,
+        **kwargs: Any,
     ) -> str:
         """Concatenates instruction + post prefix + agent suffix into one eval prompt.
 
@@ -338,27 +517,30 @@ class JEVPromptBuilder:
           [task instruction] run-constant  -> caches at the trie ROOT (1 prefill/run)
           [post prefix]       per-post      -> caches per post, shared across agents
           [agent suffix]      per-agent     -> the only varying tail
-        The instruction is built from `allowed_chars` (the ENABLED actions, same
-        set as the logit-bias) via build_task_instruction, NOT a hardcoded menu.
-        It is byte-identical for a given allowed_chars, so the root-cache
-        property holds within a run.
 
-        Guarantees (for a fixed allowed_chars):
-        1. prompt.startswith(build_task_instruction(allowed_chars) + build_post_prefix(post)) is True.
-        2. That leading slice is byte-for-byte identical across any number of agents evaluating post.
+        Guarantees (for fixed allowed_chars and use_mcq_options):
+        1. prompt.startswith(build_shared_prefix(post, allowed_chars=...)) is True.
+        2. That leading slice is 100% byte-for-byte identical across any number of agents evaluating post.
 
         Args:
             post: Shared post prefix data.
             agent: Personalized agent suffix data.
-            allowed_chars: Enabled action letters for this run (defaults to all).
+            allowed_chars: Enabled action letters or names for this run.
+            competitive: Whether scarcity framing is enabled.
+            use_mcq_options: Whether discrete choice (A, B, C, D) options are used.
 
         Returns:
             Complete assembled prompt ready for batched model forward pass.
         """
-        instruction = cls.build_task_instruction(allowed_chars, competitive=competitive)
-        prefix = cls.build_post_prefix(post)
+        shared_prefix = cls.build_shared_prefix(
+            post=post,
+            allowed_chars=allowed_chars,
+            competitive=competitive,
+            use_mcq_options=use_mcq_options,
+            **kwargs,
+        )
         suffix = cls.build_agent_suffix(agent, topic=post.topic)
-        return f"{instruction}{prefix}{suffix}"
+        return f"{shared_prefix}{suffix}"
 
     @classmethod
     def build_feed_prompt(
@@ -470,25 +652,29 @@ class JEVPromptBuilder:
         return f"{system_content}\n{user_msg}{out}"
 
     @classmethod
-    def parse_action_char(cls, raw_response: str) -> str:
+    def parse_action_char(
+        cls,
+        raw_response: str,
+        allowed_chars: Sequence[str] | None = None,
+    ) -> str:
         """Parses and validates a single reaction character ('L', 'R', 'C', 'S') from model output.
 
-        Handles common variations such as single tokens ('L'), leading whitespace (' L'),
-        action prefixes ('Action: L'), brackets ('[L]'), or full action names ('Like').
-        Defaults to 'S' (Skip) if unparseable or neutral.
+        Dynamically resolves MCQ option letters ('A', 'B', 'C', 'D') to the corresponding action
+        character for this experiment. Also handles raw action characters ('R', 'L') or words.
 
         Args:
             raw_response: Raw completion string emitted by LLM.
+            allowed_chars: Optional enabled actions for dynamic MCQ resolution.
 
         Returns:
-            One of 'L', 'R', 'C', 'S'.
+            One of 'L', 'R', 'Q', 'C', 'F', 'S'.
         """
         if not raw_response or not raw_response.strip():
             return "S"
 
         text = raw_response.strip()
 
-        # Handle 'Action: ...' or '[Action]: ...' or 'Reaction: ...'
+        # Handle 'Action: ...' or '[Action]: ...' or 'Reaction: ...' or 'Decision: ...'
         if ":" in text:
             prefix_part, after_colon = text.split(":", 1)
             if any(
@@ -500,34 +686,123 @@ class JEVPromptBuilder:
         if not text:
             return "S"
 
-        # Check bracketed or parenthesized token: [L], (L), [R], (R), etc.
-        bracket_match = re.search(r"[\[\(]([LRQCFS])[\]\)]", text, re.IGNORECASE)
-        if bracket_match:
-            return bracket_match.group(1).upper()
+        # Resolve dynamic MCQ mapping for this experiment
+        letter_to_action, _, option_letters = cls.get_mcq_mappings(allowed_chars)
 
-        # Check immediate first character
+        # Check bracketed or parenthesized token: (A), [A], (B), [B], etc.
+        opt_str = "".join(option_letters)
+        if opt_str:
+            bracket_match = re.search(rf"[\[\(]([{opt_str}])[\]\)]", text, re.IGNORECASE)
+            if bracket_match:
+                letter = bracket_match.group(1).upper()
+                if letter in letter_to_action:
+                    return letter_to_action[letter][0]
+
+        # Check immediate first character as MCQ option letter
         first_char = text[0].upper()
-        if first_char in cls.VALID_ACTIONS:
-            return first_char
+        if first_char in letter_to_action:
+            return letter_to_action[first_char][0]
+
+        # Check word boundary regex for isolated MCQ option letters
+        for letter in option_letters:
+            if re.search(rf"\b{letter}\b", text, re.IGNORECASE):
+                return letter_to_action[letter][0]
 
         # Check full word matches
         upper_text = text.upper()
+        if "REPOST" in upper_text:
+            return "R"
         if "LIKE" in upper_text:
             return "L"
         if "QUOTE" in upper_text:
             return "Q"
-        if "REPOST" in upper_text:
-            return "R"
         if "COMMENT" in upper_text:
             return "C"
         if "FOLLOW" in upper_text:
             return "F"
-        if "SKIP" in upper_text:
+        if "SKIP" in upper_text or "DO_NOTHING" in upper_text or "NOTHING" in upper_text:
             return "S"
 
-        # Check word boundary regex for isolated action characters
-        isolated_match = re.search(r"\b([LRQCFS])\b", upper_text)
-        if isolated_match:
-            return isolated_match.group(1).upper()
+        # Check raw action characters: [R], (R), [L], etc.
+        raw_bracket = re.search(r"[\[\(]([LRQCFS])[\]\)]", text, re.IGNORECASE)
+        if raw_bracket:
+            return raw_bracket.group(1).upper()
+        if first_char in cls.VALID_ACTIONS:
+            return first_char
 
         return "S"
+
+    @classmethod
+    def parse_semantic_action(
+        cls,
+        raw_response: str,
+        allowed_chars: Sequence[str] | None = None,
+    ) -> str:
+        """Parses and validates a semantic action name ('like_post', 'repost', 'follow', 'do_nothing').
+
+        Dynamically resolves MCQ option letters ('A', 'B', 'C', 'D') to the corresponding action
+        name for this experiment. Also handles raw action names or characters.
+
+        Args:
+            raw_response: Raw completion or JSON string emitted by LLM.
+            allowed_chars: Optional enabled actions for dynamic MCQ resolution.
+
+        Returns:
+            One of 'like_post', 'repost', 'quote_post', 'create_comment', 'follow', 'do_nothing'.
+        """
+        if not raw_response or not raw_response.strip():
+            return "do_nothing"
+
+        text = raw_response.strip().lower()
+
+        # Handle 'Action: ...' or '[Action]: ...' or 'Decision: ...'
+        if ":" in text:
+            prefix_part, after_colon = text.split(":", 1)
+            if any(
+                k in prefix_part
+                for k in ("action", "reaction", "decision", "choice", "response")
+            ):
+                text = after_colon.strip()
+
+        if not text:
+            return "do_nothing"
+
+        # Resolve dynamic MCQ mapping for this experiment
+        letter_to_action, _, option_letters = cls.get_mcq_mappings(allowed_chars)
+
+        # Check bracketed or parenthesized token: (A), [A], (B), etc.
+        opt_str = "".join(option_letters)
+        if opt_str:
+            bracket_match = re.search(rf"[\[\(]([{opt_str}])[\]\)]", text, re.IGNORECASE)
+            if bracket_match:
+                letter = bracket_match.group(1).upper()
+                if letter in letter_to_action:
+                    return letter_to_action[letter][1]
+
+        # Check immediate first character as MCQ option letter
+        first_char = text[0].upper()
+        if first_char in letter_to_action:
+            return letter_to_action[first_char][1]
+
+        # Check word boundary regex for isolated MCQ option letters
+        for letter in option_letters:
+            if re.search(rf"\b{letter}\b", text, re.IGNORECASE):
+                return letter_to_action[letter][1]
+
+        # Direct exact or substring matches for canonical action names
+        if "repost" in text:
+            return "repost"
+        if "like_post" in text or "like" in text:
+            return "like_post"
+        if "follow" in text:
+            return "follow"
+        if "do_nothing" in text or "nothing" in text or "skip" in text:
+            return "do_nothing"
+        if "quote_post" in text or "quote" in text:
+            return "quote_post"
+        if "create_comment" in text or "comment" in text:
+            return "create_comment"
+
+        # Fall back to single char parser mapped to action name
+        ch = cls.parse_action_char(raw_response, allowed_chars=allowed_chars)
+        return cls.ACTION_CHAR_TO_NAME.get(ch, "do_nothing")

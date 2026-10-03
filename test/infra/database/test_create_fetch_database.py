@@ -161,7 +161,8 @@ def test_post_operations():
         'num_likes': 0,
         'num_dislikes': 1,
         'num_shares': 2,
-        'num_reports': 0
+        'num_reports': 0,
+        'stance': 0.0,
     }]
     actual_result = fetch_table_from_db(cursor, "post")
 

@@ -153,6 +153,12 @@ class JEVExecutionConfig:
     # axis that restores reposting. Mutually exclusive with feed_mode. Default
     # False.
     generative_mode: bool = False
+    # SEMANTIC CHOICE mode: decodes whole-word action choices (e.g. 'repost', 'like_post')
+    # via semantic choice grammar/constrained generation with stochastic sampling (T=1.0)
+    # to eliminate single-letter continuation manifold suppression of Repost, while preserving
+    # 100% byte-identical RadixAttention KV-cache prefix structure across candidate agents.
+    semantic_choice_mode: bool = False
+    semantic_choice_temperature: float = 1.0
     # ANYJEV L0 debias (prior='none' / permutation-only): after per-post
     # classification, subtract each action-letter's batch-mean logprob (the
     # content-free label prior) and re-pick -- the training-free AnyJev L0 fix
@@ -693,7 +699,7 @@ class JEVEnvironment(OasisEnv):
 
     def __init__(
         self,
-        env_or_graph: OasisEnv | AgentGraph | Any,
+        env_or_graph: OasisEnv | AgentGraph | Any = None,
         platform: DefaultPlatformType | Platform | None = None,
         database_path: str | None = None,
         config: JEVExecutionConfig | None = None,
@@ -1069,7 +1075,8 @@ class JEVEnvironment(OasisEnv):
                     )
                 else:
                     full_prompt = JEVPromptBuilder.assemble_eval_prompt(
-                        post_prefix, agent_suffix,
+                        post_prefix,
+                        agent_suffix,
                         allowed_chars=self.config.allowed_actions,
                         competitive=self.config.competitive_mode,
                     )
@@ -1094,7 +1101,7 @@ class JEVEnvironment(OasisEnv):
             return JEVStepResult(
                 step_index=step_index,
                 total_evaluations=0,
-                action_counts={"L": 0, "R": 0, "Q": 0, "C": 0, "S": 0},
+                action_counts={"L": 0, "R": 0, "Q": 0, "C": 0, "F": 0, "S": 0},
                 execution_time_seconds=exec_time,
                 scheduled_actions=[],
             )
@@ -1139,6 +1146,16 @@ class JEVEnvironment(OasisEnv):
                     user_id=uid, post_id=pid, action_char=act,
                     confidence=1.0, logits={act: 1.0},
                 ))
+        elif self.config.semantic_choice_mode:
+            # SEMANTIC-CHOICE per-post: decodes whole-word action choices with stochastic
+            # sampling (T=1.0) to eliminate single-letter continuation manifold suppression
+            # of Repost, preserving 100% byte-identical KV-cache prefixes.
+            raw_results = await self.classifier_client.classify_batch_semantic_choice(
+                eval_items,
+                allowed_actions=self.config.allowed_actions,
+                temperature=self.config.semantic_choice_temperature,
+                generate_comments=False,
+            )
         elif self.config.generative_mode:
             # NATIVE-GENERATION per-post: generate {"action": "..."} per
             # (agent,post) via guided-JSON instead of masking a single letter.
@@ -1158,7 +1175,11 @@ class JEVEnvironment(OasisEnv):
                 for i in range(0, len(eval_items), self.config.batch_size)
             ]
             chunk_results_list = await asyncio.gather(*[
-                self.classifier_client.classify_batch(c, generate_comments=False)
+                self.classifier_client.classify_batch(
+                    c,
+                    allowed_actions=self.config.allowed_actions,
+                    generate_comments=False,
+                )
                 for c in chunks
             ])
             raw_results: list[ClassificationResult] = []
@@ -1166,16 +1187,19 @@ class JEVEnvironment(OasisEnv):
                 raw_results.extend(cr)
         else:
             raw_results = await self.classifier_client.classify_batch(
-                eval_items, generate_comments=False
+                eval_items,
+                allowed_actions=self.config.allowed_actions,
+                generate_comments=False,
             )
 
         # AnyJev L0 debias (permutation-only / prior='none'): cancel the
         # content-free per-letter bias before any dump/selection, so the
         # confidence dump and budget see the CORRECTED distribution. Skipped in
-        # feed_mode (feed results carry no per-letter logits) and generative_mode
-        # (generation has no single-letter logit distribution to debias).
+        # feed_mode (feed results carry no per-letter logits), generative_mode,
+        # and semantic_choice_mode (which decode whole words on semantic manifold).
         if (self.config.l0_debias and not self.config.feed_mode
-                and not self.config.generative_mode):
+                and not self.config.generative_mode
+                and not self.config.semantic_choice_mode):
             raw_results = apply_l0_debias(
                 raw_results,
                 group_by_user=self.config.l0_group_by_user,
@@ -1424,7 +1448,7 @@ class JEVEnvironment(OasisEnv):
             scheduled_actions.extend(organic_posts)
 
         # Stage k: Compile action distribution and return JEVStepResult
-        action_counts = {"L": 0, "R": 0, "Q": 0, "C": 0, "S": 0, "P": 0}
+        action_counts = {"L": 0, "R": 0, "Q": 0, "C": 0, "F": 0, "S": 0, "P": 0}
         for sa in scheduled_actions:
             c = sa.action_dict.get("action_char", "S")
             action_counts[c] = action_counts.get(c, 0) + 1

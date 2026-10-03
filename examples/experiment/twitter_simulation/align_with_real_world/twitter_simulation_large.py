@@ -196,12 +196,9 @@ async def running(
     _jev_cfg = None
     if _use_jev:
         from oasis.environment.jev_env import JEVExecutionConfig
-        from oasis.inference.jev_classifier import (
-            DEFAULT_ACTION_TOKEN_MAP, VLLMJEVClassifierClient)
-        # Build the classifier against the same vLLM server, restricted to the
-        # action set OASIS was given for this scenario (available_actions).
-        # available_actions entries may be ActionType OR action-name strings
-        # (the yaml_200 configs use strings like "like_post"); handle both.
+        from oasis.inference.jev_classifier import VLLMJEVClassifierClient
+
+        # Dynamically map available actions to canonical actions
         char_by_name = {
             "like_post": "L", "repost": "R", "quote_post": "Q",
             "create_comment": "C", "follow": "F", "do_nothing": "S",
@@ -213,89 +210,38 @@ async def running(
 
         allowed_chars = [c for c in (_action_char(a)
                          for a in (available_actions or [])) if c] \
-            or ["L", "R", "F", "S"]
+            or ["R", "L", "F", "S"]
         if "S" not in allowed_chars:
             allowed_chars.append("S")
-        logit_bias = {}
-        for ch in allowed_chars:
-            for tid in DEFAULT_ACTION_TOKEN_MAP.get(ch, []):
-                logit_bias[tid] = 50.0
-        token_id_map = {ch: DEFAULT_ACTION_TOKEN_MAP[ch][0]
-                        for ch in allowed_chars if ch in DEFAULT_ACTION_TOKEN_MAP}
+
         jev_url = os.environ.get("JEV_VLLM_URL") or (
             inference_configs or {}).get("base_url", "http://127.0.0.1:8000/v1")
         jev_model = os.environ.get("JEV_VLLM_MODEL") or (
             inference_configs or {}).get("model_type", "")
         os.environ.setdefault("OPENAI_API_KEY", "EMPTY")
-        # Match base-OASIS classic sampling: classic agents go through CAMEL's
-        # VLLMConfig, whose temperature defaults to None -> vLLM server default
-        # 1.0 (full sampling). JEV's classifier defaulted to temperature=0.0
-        # (GREEDY argmax), which deterministically picks the single top action
-        # (always Like for an isolated post) and NEVER samples the lower-but-
-        # real-probability Repost -- the true cause of JEV's 0-repost collapse,
-        # not the prompt. Match classic by sampling at 1.0. Override via
-        # OASIS_JEV_CLASSIFY_TEMP.
+
+        # Match base-OASIS classic sampling: temperature 1.0 (override via OASIS_JEV_CLASSIFY_TEMP)
         _jev_temp = float(os.environ.get("OASIS_JEV_CLASSIFY_TEMP", "1.0"))
-        # GUIDED-CHOICE (OASIS_JEV_GUIDED_CHOICE=1): replace the logit-bias+argmax
-        # classifier with vLLM structured-outputs CHOICE masking over the enabled
-        # action letters. The server masks to exactly {allowed_chars} over the
-        # real tokenizer and the model's temperature-sampled preference decides --
-        # the faithful analogue of classic's tool-call generation, with no
-        # hand-picked / colliding token ids. When on, logit_bias/token_id_map are
-        # NOT passed (the choice grammar supersedes them).
-        _use_l0 = os.environ.get("OASIS_JEV_L0", "0") == "1"
-        _l0_strength = float(os.environ.get("OASIS_JEV_L0_STRENGTH", "1.0"))
-        # L0 debias operates on action-letter logprobs, requiring guided_choice
-        # to ensure all candidate letters produce valid logprobs without token-ID bias.
-        _use_guided = (os.environ.get("OASIS_JEV_GUIDED_CHOICE", "0") == "1") or _use_l0
-        _instruct_frame = os.environ.get("OASIS_JEV_INSTRUCT_FRAME", "0") == "1"
+
         print(
-            f"[JEV CONFIG] actions={allowed_chars} url={jev_url} temp={_jev_temp} "
-            f"guided_choice={_use_guided} l0_debias={_use_l0} (strength={_l0_strength}) "
-            f"instruct_frame={_instruct_frame}"
+            f"[JEV CONFIG] TypeSafe discrete choice model: actions={allowed_chars} "
+            f"url={jev_url} temp={_jev_temp}"
         )
         social_log.info(
-            "JEV ENABLED: actions=%s url=%s classify_temp=%.2f guided_choice=%s "
-            "instruct_frame=%s",
-            allowed_chars, jev_url, _jev_temp, _use_guided, _instruct_frame)
+            "JEV ENABLED: actions=%s url=%s classify_temp=%.2f",
+            allowed_chars, jev_url, _jev_temp,
+        )
+
         _jev_cfg = JEVExecutionConfig(
             classifier_client=VLLMJEVClassifierClient(
-                base_url=jev_url, model_name=jev_model,
-                logit_bias=(None if _use_guided else logit_bias),
-                token_id_map=(None if _use_guided else token_id_map),
-                guided_choice_actions=(allowed_chars if _use_guided else None),
-                instruct_frame=_instruct_frame,
-                temperature=_jev_temp),
+                base_url=jev_url,
+                model_name=jev_model,
+                guided_choice_actions=allowed_chars,
+                temperature=_jev_temp,
+            ),
             max_actions_per_agent=1,
             enable_belief_updates=False,
-            # Enabled action letters (from the config's available_actions) so the
-            # JEV task-instruction prompt lists ONLY these actions, matching what
-            # a classic agent would be given -- not a hardcoded menu.
             allowed_actions=allowed_chars,
-            # WHOLE-FEED experiment toggle (OASIS_JEV_FEED_MODE=1): one call per
-            # agent over the full feed instead of per-post. Default off.
-            feed_mode=(os.environ.get("OASIS_JEV_FEED_MODE", "0") == "1"),
-            # Use the EXACT upstream OASIS prompt (OASIS_JEV_VERBATIM=1).
-            verbatim_prompt=(os.environ.get("OASIS_JEV_VERBATIM", "0") == "1"),
-            # COMPETITIVE per-post experiment (OASIS_JEV_COMPETITIVE=1): keep the
-            # per-post 1-token path (cache intact) but add scarcity framing + do
-            # cross-feed full-logits selection instead of argmax-then-budget.
-            competitive_mode=(os.environ.get("OASIS_JEV_COMPETITIVE", "0") == "1"),
-            # NATIVE-GENERATION per-post (OASIS_JEV_GENERATIVE=1): generate the
-            # action as guided-JSON {"action":"repost"} per post instead of
-            # masking a letter -- the faithful analogue of classic's tool-call
-            # generation. Mutually exclusive with feed_mode.
-            generative_mode=(os.environ.get("OASIS_JEV_GENERATIVE", "0") == "1"),
-            # ANYJEV L0 debias (OASIS_JEV_L0=1): cancel the content-free per-letter
-            # bias (permutation-only / prior='none') after classification. Pairs
-            # with guided_choice. OASIS_JEV_L0_GROUP=1 => per-user mean.
-            # OASIS_JEV_L0_STRENGTH controls the profile damping (default 1.0; 0.75 recommended).
-            l0_debias=_use_l0,
-            l0_prior_strength=_l0_strength,
-            l0_group_by_user=(os.environ.get("OASIS_JEV_L0_GROUP", "0") == "1"),
-            # Where to dump the per-post P(R) vs P(L) confidence-gap CSV. Set via
-            # OASIS_JEV_CONF_DUMP; empty => no dump.
-            confidence_dump_path=(os.environ.get("OASIS_JEV_CONF_DUMP") or None),
             # The driver already calls infra.update_rec_table() once per step
             # (the expensive twhin-BERT embedding pass). Don't let step_jev run
             # it a SECOND time -- that doubled the heaviest op every step.
