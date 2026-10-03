@@ -17,15 +17,8 @@ import pickle
 import sqlite3
 import numpy as np
 
-# prop_graph lives in the align visualization code. This script sits at
-# examples/experiment/jev_information_spreading/, so the repo root is 3 levels
-# up, and the viz code is <repo>/visualization/.../code.
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-VIZ = os.path.join(_REPO,
-                   "visualization/twitter_simulation/align_with_real_world/code")
-sys.path.insert(0, VIZ)
 import pandas as pd  # noqa: E402
-from graph import prop_graph  # noqa: E402
 
 HORIZON = 150  # paper compares first 150 minutes (50 steps x 3 min)
 
@@ -46,18 +39,93 @@ def action_counts(db):
     return d
 
 
-def stats(db, content):
-    pg = prop_graph(content, db, viz=False)
-    pg.build_graph()
-    _, scale = pg.plot_scale_time()
-    _, depth = pg.plot_depth_time()
-    _, mb = pg.plot_max_breadth_time()
+def _cascade_curves(db):
+    """Build the repost cascade DIRECTLY from the post table and return
+    (scale, depth, max_breadth) curves over the 150-minute horizon.
 
-    def pad(x):
-        x = list(x)
-        x += [x[-1] if x else 0] * (HORIZON - len(x))
-        return np.array(x[:HORIZON], dtype=float)
-    return pad(scale), pad(depth), pad(mb)
+    This replaces visualization/.../graph.py:prop_graph, which crashes on a
+    sparse/degenerate cascade (NetworkX 'node not in digraph' when the root was
+    never added, 'max() on empty sequence' when there are no reposts, and
+    pdb.set_trace() in its except blocks -- fatal in a batch job). The classic
+    tool_choice=auto run produces ZERO reposts, which hit every one of those.
+
+    Cascade model (paper F.2.2): each row in `post` is a node.
+      - original_post_id IS NULL  -> source/root post (depth 0)
+      - original_post_id = P      -> a repost of post P (edge P -> this)
+    created_at is minutes since the source post.
+    scale(t)       = number of posts in the cascade with created_at <= t
+    depth(t)       = longest root->leaf path length among those posts
+    max_breadth(t) = largest number of posts at any single depth level
+    All three are monotonic step curves padded/truncated to HORIZON.
+    """
+    con = sqlite3.connect(db)
+    cur = con.cursor()
+    try:
+        rows = cur.execute(
+            "SELECT post_id, original_post_id, created_at FROM post "
+            "ORDER BY created_at, post_id").fetchall()
+    except Exception:
+        rows = []
+    finally:
+        con.close()
+
+    zero = np.zeros(HORIZON, dtype=float)
+    if not rows:
+        return zero.copy(), zero.copy(), zero.copy()
+
+    # parent map + per-post arrival time (clamped to >=0)
+    parent = {}
+    created = {}
+    roots = []
+    for pid, opid, t in rows:
+        t = max(0, int(t or 0))
+        created[pid] = t
+        if opid is None:
+            roots.append(pid)
+        else:
+            parent[pid] = opid
+
+    # depth of each post within the cascade tree (root depth = 0); any post
+    # whose parent chain does not terminate at a known root is skipped.
+    def post_depth(pid, _seen=None):
+        _seen = _seen or set()
+        d = 0
+        cur_id = pid
+        while cur_id in parent:
+            if cur_id in _seen:        # cycle guard (should not happen)
+                return None
+            _seen.add(cur_id)
+            cur_id = parent[cur_id]
+            d += 1
+            if cur_id not in created:  # dangling parent
+                return None
+        return d  # cur_id is a root
+
+    depth_of = {}
+    for pid in created:
+        dd = post_depth(pid)
+        if dd is not None:
+            depth_of[pid] = dd
+
+    scale = np.zeros(HORIZON, dtype=float)
+    depth = np.zeros(HORIZON, dtype=float)
+    mb = np.zeros(HORIZON, dtype=float)
+    for t in range(HORIZON):
+        present = [p for p in depth_of if created[p] <= t]
+        scale[t] = len(present)
+        if present:
+            depth[t] = max(depth_of[p] for p in present)
+            # breadth per level, max over levels
+            counts = {}
+            for p in present:
+                counts[depth_of[p]] = counts.get(depth_of[p], 0) + 1
+            mb[t] = max(counts.values())
+    return scale, depth, mb
+
+
+def stats(db, content=None):
+    # content kept for signature compatibility; no longer needed.
+    return _cascade_curves(db)
 
 
 def nrmse(a, b):
@@ -70,23 +138,24 @@ def real_curve(topic, stat):
     p = os.path.join(
         _REPO,
         f"data/twitter_dataset/real_world_prop_data/real_data_{stat}/{topic}.pkl")
-    y = pickle.load(open(os.path.abspath(p), "rb"))
-    y = list(y) + [y[-1]] * (HORIZON - len(y))
+    try:
+        y = pickle.load(open(os.path.abspath(p), "rb"))
+    except Exception as e:
+        print(f"  (real-world {stat} pkl unavailable: {e})")
+        return None
+    y = list(y) + [y[-1] if len(y) else 0] * (HORIZON - len(y))
     return np.array(y[:HORIZON], dtype=float)
 
 
 def main():
     classic_db, jev_db, topic = sys.argv[1], sys.argv[2], sys.argv[3]
-    topics = pd.read_csv(os.path.join(
-        _REPO, "data/twitter_dataset/all_topics.csv"))
-    content = topics[topics["topic_name"] == topic]["source_tweet"].item()
 
     print("=== ACTION COUNTS ===")
     print("classic:", action_counts(classic_db))
     print("jev    :", action_counts(jev_db))
 
-    cs, cd, cmb = stats(classic_db, content)
-    js, jd, jmb = stats(jev_db, content)
+    cs, cd, cmb = stats(classic_db)
+    js, jd, jmb = stats(jev_db)
 
     print("\n=== FINAL VALUES (scale / depth / max_breadth) ===")
     print(f"classic: {cs[-1]:.0f} / {cd.max():.0f} / {cmb[-1]:.0f}")
@@ -102,6 +171,8 @@ def main():
         "scale": (cs, js), "depth": (cd, jd), "max_breadth": (cmb, jmb)
     }.items():
         r = real_curve(topic, name)
+        if r is None:
+            continue
         print(f"{name:12s} classic={nrmse(c_, r):.3f}  jev={nrmse(j_, r):.3f}")
 
 
