@@ -119,6 +119,11 @@ class JEVExecutionConfig:
     enable_belief_updates: bool = True
     max_actions_per_agent: int = 1
     classifier_client: JEVClassifierClient | None = None
+    # Enabled action letters for this run (e.g. ["L","R","F","S"]). Derived from
+    # the config's available_actions by the driver and threaded into the prompt
+    # builder so the task instruction lists ONLY these actions -- never a
+    # hardcoded menu. None => all VALID_ACTIONS.
+    allowed_actions: Sequence[str] | None = None
     default_topic: str = "general"
     seed: int | None = None
     downgrade_to_skip: bool = True
@@ -935,7 +940,8 @@ class JEVEnvironment(OasisEnv):
                     agent, belief_state, post_prefix.topic
                 )
                 full_prompt = JEVPromptBuilder.assemble_eval_prompt(
-                    post_prefix, agent_suffix
+                    post_prefix, agent_suffix,
+                    allowed_chars=self.config.allowed_actions,
                 )
 
                 eval_item = EvalItem(

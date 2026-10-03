@@ -234,6 +234,10 @@ async def running(
                 logit_bias=logit_bias, token_id_map=token_id_map),
             max_actions_per_agent=1,
             enable_belief_updates=False,
+            # Enabled action letters (from the config's available_actions) so the
+            # JEV task-instruction prompt lists ONLY these actions, matching what
+            # a classic agent would be given -- not a hardcoded menu.
+            allowed_actions=allowed_chars,
             # The driver already calls infra.update_rec_table() once per step
             # (the expensive twhin-BERT embedding pass). Don't let step_jev run
             # it a SECOND time -- that doubled the heaviest op every step.

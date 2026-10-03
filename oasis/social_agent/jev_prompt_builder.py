@@ -95,25 +95,58 @@ class JEVPromptBuilder:
 
     VALID_ACTIONS: Sequence[str] = ("L", "R", "Q", "C", "F", "S")
 
-    # GLOBAL, RUN-CONSTANT instruction preamble. Byte-identical for every agent
-    # and every post, so prepending it ahead of the post prefix makes it cache
-    # at the ROOT of the RadixAttention trie -- tokenized/prefilled ONCE for the
-    # entire run and reused by every eval item, instead of re-paying for it per
-    # agent (which is what a per-agent suffix would cost). The wording mirrors
-    # the classic OASIS agent prompt ("perform social media actions ... don't
-    # limit your actions, for example, to just like the posts"): it encourages
-    # active engagement and spreading (Repost/Quote/Comment/Follow) over a
-    # passive Like or Skip, so JEV's action propensity matches the classic
-    # baseline. Output contract is unchanged (one letter from L/R/Q/C/F/S).
-    TASK_INSTRUCTION: str = (
-        "You are an active social media user reacting to posts. For each post, "
-        "perform a social media action -- do not limit yourself to just liking "
-        "or skipping. If a post fits your views, help it spread: prefer Repost "
-        "or Quote, or engage with Comment or Follow. Choose exactly ONE "
-        "reaction and output ONLY its letter:\n"
-        "L (Like), R (Repost), Q (Quote), C (Comment), F (Follow author), "
-        "S (Skip).\n\n"
+    # Canonical action-char -> (tool name, human description) used to render the
+    # action menu. Mirrors the align driver's char_by_name and the FunctionTool
+    # names base OASIS exposes, so the JEV prompt lists the SAME actions a
+    # classic agent would be given for the same `available_actions`.
+    ACTION_DESCRIPTIONS: dict = {
+        "L": ("like_post", "like the post"),
+        "R": ("repost", "repost the post"),
+        "Q": ("quote_post", "quote the post with your own commentary"),
+        "C": ("create_comment", "comment on the post"),
+        "F": ("follow", "follow the post's author"),
+        "S": ("do_nothing", "do nothing"),
+    }
+
+    # Base-OASIS agent prompt, verbatim (oasis/social_agent/agent.py,
+    # perform_action_by_llm). The classic path sends this as the user message and
+    # relies on the TOOL SCHEMAS to tell the model which actions exist. JEV has
+    # no tool schemas (it uses 1-token logit-bias), so build_task_instruction()
+    # reproduces this sentence AND enumerates the enabled actions explicitly --
+    # keeping JEV's prompt as close to base OASIS as possible while remaining
+    # driven by `available_actions`, never a hardcoded set.
+    OASIS_PROMPT_STEM: str = (
+        "Please perform social media actions after observing the platform "
+        "environments. Notice that don't limit your actions for example to "
+        "just like the posts."
     )
+
+    @classmethod
+    def build_task_instruction(cls, allowed_chars: Sequence[str] | None = None) -> str:
+        """Render the run-constant instruction preamble from the ENABLED actions.
+
+        Not a hardcoded menu: the action list is derived from `allowed_chars`
+        (the same set that drives the logit-bias), so a run that enables only
+        [like_post, repost, follow, do_nothing] advertises exactly L/R/F/S and
+        never mentions Quote/Comment the classifier cannot emit. The wording
+        reuses base OASIS's own prompt sentence (OASIS_PROMPT_STEM) for 1:1
+        parity, then lists the enabled single-letter actions. Byte-identical for
+        a given `allowed_chars`, so it still caches at the RadixAttention root.
+        """
+        chars = [c for c in (allowed_chars or cls.VALID_ACTIONS)
+                 if c in cls.ACTION_DESCRIPTIONS]
+        if "S" not in chars:
+            chars.append("S")  # a no-op choice must always be available
+        menu = ", ".join(
+            f"{c} ({cls.ACTION_DESCRIPTIONS[c][1]})" for c in chars
+        )
+        letters = "/".join(chars)
+        return (
+            f"{cls.OASIS_PROMPT_STEM}\n"
+            f"For the post below, choose exactly ONE action and output ONLY its "
+            f"letter ({letters}):\n"
+            f"{menu}.\n\n"
+        )
 
     @staticmethod
     def build_post_prefix(post: PostPrefixData) -> str:
@@ -229,12 +262,12 @@ class JEVPromptBuilder:
             Personalized suffix string terminating in 'Action: '.
         """
         persona_context = cls.build_agent_persona_context(agent, topic=topic)
-        # NOTE: the action-encouraging steer lives in the GLOBAL cached preamble
-        # (cls.TASK_INSTRUCTION, prepended in assemble_eval_prompt), NOT here --
-        # it is byte-identical for every agent and every post, so it belongs at
-        # the trie root where it caches once for the whole run. This suffix is
-        # the ONLY per-agent-varying part; keep it minimal (persona + the final
-        # 'Action: ' cue). Output contract stays a single letter L/R/Q/C/F/S.
+        # NOTE: the task instruction + action menu live in the GLOBAL cached
+        # preamble (build_task_instruction(allowed_chars), prepended in
+        # assemble_eval_prompt), NOT here -- it is byte-identical for every agent
+        # and post in a run, so it belongs at the trie root where it caches once.
+        # This suffix is the ONLY per-agent-varying part; keep it minimal
+        # (persona + the 'Action: ' cue). Output stays a single letter.
         return (
             f"{persona_context}\n"
             "Action: "
@@ -245,31 +278,35 @@ class JEVPromptBuilder:
         cls,
         post: PostPrefixData,
         agent: AgentSuffixData,
+        allowed_chars: Sequence[str] | None = None,
     ) -> str:
-        """Concatenates post prefix and agent suffix into a single item evaluation prompt.
+        """Concatenates instruction + post prefix + agent suffix into one eval prompt.
 
         Layout (ordered for maximal RadixAttention KV-cache reuse):
-          [TASK_INSTRUCTION]  run-constant  -> caches at the trie ROOT (1 prefill/run)
+          [task instruction] run-constant  -> caches at the trie ROOT (1 prefill/run)
           [post prefix]       per-post      -> caches per post, shared across agents
           [agent suffix]      per-agent     -> the only varying tail
-        So the longest shared leading prefix across ALL eval items is
-        TASK_INSTRUCTION, and across items for one post it is
-        TASK_INSTRUCTION + post prefix.
+        The instruction is built from `allowed_chars` (the ENABLED actions, same
+        set as the logit-bias) via build_task_instruction, NOT a hardcoded menu.
+        It is byte-identical for a given allowed_chars, so the root-cache
+        property holds within a run.
 
-        Guarantees:
-        1. prompt.startswith(cls.TASK_INSTRUCTION + cls.build_post_prefix(post)) is True.
+        Guarantees (for a fixed allowed_chars):
+        1. prompt.startswith(build_task_instruction(allowed_chars) + build_post_prefix(post)) is True.
         2. That leading slice is byte-for-byte identical across any number of agents evaluating post.
 
         Args:
             post: Shared post prefix data.
             agent: Personalized agent suffix data.
+            allowed_chars: Enabled action letters for this run (defaults to all).
 
         Returns:
             Complete assembled prompt ready for batched model forward pass.
         """
+        instruction = cls.build_task_instruction(allowed_chars)
         prefix = cls.build_post_prefix(post)
         suffix = cls.build_agent_suffix(agent, topic=post.topic)
-        return f"{cls.TASK_INSTRUCTION}{prefix}{suffix}"
+        return f"{instruction}{prefix}{suffix}"
 
     @classmethod
     def parse_action_char(cls, raw_response: str) -> str:
