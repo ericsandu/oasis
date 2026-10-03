@@ -29,7 +29,15 @@ echo "=== start vLLM on $PORT ==="
 $RUN python3 -m vllm.entrypoints.openai.api_server --model $MODEL \
   --served-model-name $MODEL --host 127.0.0.1 --port $PORT \
   --max-model-len 8192 --gpu-memory-utilization 0.90 --enforce-eager \
-  --trust-remote-code > vllm_compare.log 2>&1 &
+  --trust-remote-code \
+  --enable-auto-tool-choice --tool-call-parser hermes \
+  > vllm_compare.log 2>&1 &
+# tool-call parsing: vLLM 0.23 rejects tool_choice="required" unless
+# --tool-call-parser is set. llama3_json CRASHES on plain Meta-Llama-3-8B
+# (tokenizer lacks the <|python_tag|> token it needs); hermes is JSON/regex
+# based and tokenizer-agnostic, so it loads for Llama-3. Needed only by the
+# CLASSIC leg; the JEV classifier uses /v1/completions logit-bias and is
+# unaffected by these flags.
 VP=$!
 for i in $(seq 1 180); do sleep 2; curl -sf http://127.0.0.1:$PORT/health >/dev/null 2>&1 && { echo "vLLM up ($((i*2))s)"; break; }; kill -0 $VP 2>/dev/null || { echo "vLLM died"; tail -40 vllm_compare.log; exit 1; }; done
 
