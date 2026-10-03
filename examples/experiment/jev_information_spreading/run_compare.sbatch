@@ -47,7 +47,11 @@ DRIVER="$ALIGN/twitter_simulation_large.py"
 
 echo "=== CLASSIC run (use_jev:false) ==="
 C0=$(date +%s)
-$RUN bash -c "export JEV_VLLM_URL='$JEV_VLLM_URL' JEV_VLLM_MODEL='$JEV_VLLM_MODEL'; python3 $DRIVER --config_path $ALIGN/classic_align.yaml"
+# tool_choice=auto: the 404 fix + hermes parser are now in place, so agents
+# can emit tool calls when they choose WITHOUT forcing one every turn (much
+# faster than "required", and the paper-faithful baseline -- the paper did not
+# force an action every step). Override via OASIS_CLASSIC_TOOL_CHOICE.
+$RUN bash -c "export JEV_VLLM_URL='$JEV_VLLM_URL' JEV_VLLM_MODEL='$JEV_VLLM_MODEL' OASIS_CLASSIC_TOOL_CHOICE='${OASIS_CLASSIC_TOOL_CHOICE:-auto}'; python3 $DRIVER --config_path $ALIGN/classic_align.yaml"
 C1=$(date +%s); echo "CLASSIC wall-clock: $((C1-C0))s"
 
 echo "=== JEV run (use_jev:true) ==="
