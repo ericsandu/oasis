@@ -242,6 +242,13 @@ async def running(
         _jev_env = OasisEnv(agent_graph=agent_graph, platform=infra,
                             database_path=db_path)
 
+    # Sim-only wall clock: brackets ONLY the step loop (steps 1..N), excluding
+    # imports, recsys-model load, and agent-graph generation -- the fixed
+    # startup overhead that otherwise inflates a per-process timer and masks the
+    # true classic-vs-JEV difference. Printed as a parseable line for the
+    # benchmark harness.
+    import time as _time
+    _sim_t0 = _time.perf_counter()
     for timestep in range(1, num_timesteps + 1):
         clock.time_step = timestep * 3
         social_log.info(f"timestep:{timestep}")
@@ -281,6 +288,11 @@ async def running(
                 jev_kwargs=({"config": _jev_cfg} if timestep == 1 else None),
             )
 
+    _sim_wall = _time.perf_counter() - _sim_t0
+    # Parseable marker for the benchmark harness (sim-only, excludes startup).
+    print(f"SIM_WALL_SECONDS={_sim_wall:.3f} engine={'jev' if _use_jev else 'classic'}")
+    social_log.info("SIM_WALL_SECONDS=%.3f engine=%s", _sim_wall,
+                    "jev" if _use_jev else "classic")
     await twitter_channel.write_to_receive_queue((None, None, ActionType.EXIT))
     await twitter_task
 
