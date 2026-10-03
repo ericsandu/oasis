@@ -269,6 +269,11 @@ async def running(
             # per-post 1-token path (cache intact) but add scarcity framing + do
             # cross-feed full-logits selection instead of argmax-then-budget.
             competitive_mode=(os.environ.get("OASIS_JEV_COMPETITIVE", "0") == "1"),
+            # NATIVE-GENERATION per-post (OASIS_JEV_GENERATIVE=1): generate the
+            # action as guided-JSON {"action":"repost"} per post instead of
+            # masking a letter -- the faithful analogue of classic's tool-call
+            # generation. Mutually exclusive with feed_mode.
+            generative_mode=(os.environ.get("OASIS_JEV_GENERATIVE", "0") == "1"),
             # Where to dump the per-post P(R) vs P(L) confidence-gap CSV. Set via
             # OASIS_JEV_CONF_DUMP; empty => no dump.
             confidence_dump_path=(os.environ.get("OASIS_JEV_CONF_DUMP") or None),

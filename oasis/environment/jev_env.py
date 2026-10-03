@@ -145,6 +145,13 @@ class JEVExecutionConfig:
     # comparison. No action weighting. Also dumps per-post P(R) vs P(L) to CSV.
     # Default False (standard per-post argmax-then-budget).
     competitive_mode: bool = False
+    # NATIVE-GENERATION per-post mode: the classifier GENERATES the action as
+    # multi-token guided-JSON ({"action":"repost"}) per (agent,post) instead of
+    # masking a single letter -- the faithful analogue of classic's tool-call
+    # generation. Tests whether generation (not feed, not token mask) is the
+    # axis that restores reposting. Mutually exclusive with feed_mode. Default
+    # False.
+    generative_mode: bool = False
     # Path to write the per-post P(R) vs P(L) confidence-gap CSV when
     # competitive_mode (or confidence_dump) is on. None => no dump.
     confidence_dump_path: str | None = None
@@ -1117,6 +1124,15 @@ class JEVEnvironment(OasisEnv):
                     user_id=uid, post_id=pid, action_char=act,
                     confidence=1.0, logits={act: 1.0},
                 ))
+        elif self.config.generative_mode:
+            # NATIVE-GENERATION per-post: generate {"action": "..."} per
+            # (agent,post) via guided-JSON instead of masking a single letter.
+            # classify_batch_generative handles its own item-level concurrency.
+            raw_results = await self.classifier_client.classify_batch_generative(
+                eval_items,
+                allowed_chars=self.config.allowed_actions,
+                generate_comments=False,
+            )
         elif self.config.batch_size > 0 and len(eval_items) > self.config.batch_size:
             # Fire all chunks CONCURRENTLY: vLLM batches them server-side, so
             # the GPU stays saturated instead of idling between serial

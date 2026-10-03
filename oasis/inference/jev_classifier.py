@@ -742,6 +742,16 @@ class MockJEVClassifierClient:
 
         return results
 
+    async def classify_batch_generative(
+        self,
+        items: list[EvalItem],
+        allowed_chars: list | None = None,
+        generate_comments: bool = False,
+    ) -> list[ClassificationResult]:
+        """Mock parity for the native-generation path: same deterministic
+        action mapping as classify_batch (the mock has no real generation)."""
+        return await self.classify_batch(items, generate_comments=generate_comments)
+
     # Alias matching plan nomenclature
     classify_actions_batch = classify_batch
 
@@ -1241,6 +1251,121 @@ class VLLMJEVClassifierClient:
                     results[res_idx].quote_text = quote
 
         return results
+
+    async def classify_batch_generative(
+        self,
+        items: list[EvalItem],
+        allowed_chars: list | None = None,
+        generate_comments: bool = False,
+    ) -> list[ClassificationResult]:
+        """NATIVE-GENERATION per-post path: instead of masking a single action
+        LETTER (classification), the model GENERATES the action as multi-token
+        guided-JSON output -- {"action": "repost"} -- per (agent, post). This is
+        the faithful analogue of classic OASIS's tool-call generation, where the
+        model deliberately composes `repost(...)` rather than having a single
+        next-token read off. k=1 classic showed the model reposts an isolated
+        post readily when it GENERATES the act; single-token classification does
+        not capture that. This path tests whether generation (not the feed, not
+        the token mask) is the axis.
+
+        Keeps the per-post structure (one call per agent-post) so item-level
+        concurrency and the eval pipeline downstream are unchanged. Uses the
+        action NAME enum (like_post/repost/...) so the model composes a word, not
+        a letter. Returns ClassificationResult list in item order.
+
+        Args:
+            items: EvalItem list (full_prompt already assembled per post).
+            allowed_chars: enabled action letters; mapped to tool names for the
+                           JSON enum via JEVPromptBuilder.ACTION_DESCRIPTIONS.
+            generate_comments: trigger comment/quote workers for C/Q choices.
+
+        Returns:
+            list[ClassificationResult] in corresponding order.
+        """
+        if not items:
+            return []
+
+        chars = [c for c in (allowed_chars or ["L", "R", "F", "S"]) if c]
+        if "S" not in chars:
+            chars.append("S")
+        # name<->char maps from the single source of truth (ACTION_DESCRIPTIONS).
+        name_by_char = {
+            c: JEVPromptBuilder.ACTION_DESCRIPTIONS[c][0]
+            for c in chars if c in JEVPromptBuilder.ACTION_DESCRIPTIONS
+        }
+        char_by_name = {v: k for k, v in name_by_char.items()}
+        action_names = list(name_by_char.values())
+
+        schema = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "post_action",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": action_names},
+                    },
+                    "required": ["action"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+        endpoint = f"{self.base_url}/chat/completions"
+
+        async def _one(idx: int, item: EvalItem) -> ClassificationResult:
+            payload = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": item.full_prompt}],
+                "max_tokens": 16,
+                "temperature": self.temperature,
+                "response_format": schema,
+            }
+            for attempt in range(self.max_retries + 1):
+                try:
+                    resp = await self._client.post(endpoint, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        content = (data.get("choices", [{}])[0]
+                                   .get("message", {}).get("content", ""))
+                        name = str(json.loads(content).get("action", "")).strip()
+                        ch = char_by_name.get(name, "S")
+                        return ClassificationResult(
+                            user_id=item.user_id, post_id=item.post_id,
+                            action_char=ch, confidence=1.0, logits={ch: 1.0},
+                        )
+                    elif resp.status_code == 400:
+                        # drop guided schema and retry free-form once
+                        payload.pop("response_format", None)
+                    else:
+                        logger.warning(
+                            "generative /chat returned HTTP %d: %s",
+                            resp.status_code, resp.text[:160])
+                except Exception as e:  # noqa: BLE001
+                    if attempt == self.max_retries:
+                        logger.debug(
+                            "classify_batch_generative failed (uid=%s pid=%s): %s",
+                            item.user_id, item.post_id, e)
+                    await asyncio.sleep(0.1 * (2 ** attempt))
+            return ClassificationResult(
+                user_id=item.user_id, post_id=item.post_id,
+                action_char="S", confidence=0.0, logits={"S": 1.0},
+            )
+
+        results = await asyncio.gather(*[
+            _one(i, it) for i, it in enumerate(items)
+        ])
+
+        if generate_comments or self.auto_generate_comments:
+            for res, it in zip(results, items):
+                if res.action_char == "C" and not res.comment_text:
+                    res.comment_text = await self.generate_comment(
+                        it.full_prompt, it.post_content)
+                elif res.action_char == "Q" and not res.quote_text:
+                    res.quote_text = await self.generate_quote(
+                        it.full_prompt, it.post_content)
+
+        return list(results)
 
     async def classify_feed(
         self,
